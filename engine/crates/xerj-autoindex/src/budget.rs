@@ -44,7 +44,7 @@ const CAP_1MB: u64 = 1 << 20;
 /// What the calibration measured, and where. An empty table is not a zero
 /// estimate. The numbers in [`MEASURED`] are dataset-index store sizes from
 /// one release binary on one host; they are not a promise about this machine.
-const CALIBRATION_NOTE: &str = "per-kind ratios are dataset-index store sizes measured 2026-10-21 with xerj v1.0.0-rc.97 on one 4-core Linux x86_64 host. Embeddings were the default lexical feature-hash (the neural embedder was not enabled). Catalog store size is not included. time_s is a rough projection from that host, not this machine. A kind with no row is unmeasured and does not refuse the run";
+const CALIBRATION_NOTE: &str = "per-kind ratios are dataset-index store sizes measured 2026-10-21 with xerj v1.0.0-rc.97 on one 4-core Linux x86_64 host. Code and prose were measured on real repository sources and docs; data, pdf and unindexed kinds on synthetic files. Embeddings were the default lexical feature-hash (the neural embedder was not enabled). Catalog store size is not included. time_s is a rough projection from that host, not this machine. A kind with no row is unmeasured and does not refuse the run";
 
 /// One measured index of one kind.
 #[derive(Debug, Clone, Copy)]
@@ -77,87 +77,95 @@ struct Calib {
 
 /// Release-binary calibration, 2026-10-21.
 ///
-/// Binary: `/workspace/engine/target/release/xerj` reporting `xerj v1.0.0-rc.97`,
-/// started `--insecure` (lexical feature-hash embeddings; `--embed-mode neural`
-/// was not passed). Host: Linux 6.12.94+ x86_64, 4 cores, 16387280 KiB RAM.
+/// Binary: `xerj v1.0.0-rc.97`, started `--insecure` (lexical feature-hash
+/// embeddings; `--embed-mode neural` was not passed). Host: Linux 6.12.94+
+/// x86_64, 4 cores, 16387280 KiB RAM.
 ///
-/// Each point is one `xerj autoindex` of files with distinct tokens (a repeated
-/// byte does not exercise the index). `index_bytes` is the sum of `store.size`
-/// for that prefix's indices from `GET /_cat/indices?bytes=b&h=index,store.size`
-/// after the run. `autoindex-catalog` is omitted: its store size moved by tens
-/// of KB in both directions between runs. `.npy` files were recorded as junk
+/// Code and prose points are real repository content, not synthetic files:
+/// copies of this repository's `.rs` sources (5 files / 291,007 B and
+/// 97 files / 5,096,601 B) and `.md` documents (24 files / 520,410 B and
+/// 169 files / 2,969,566 B). Synthetic distinct-token files under-predicted
+/// those by about 3.5x, so they were replaced. Data, PDF and unindexed points
+/// are still the synthetic runs described below.
+///
+/// `index_bytes` is the sum of `store.size` for that prefix's indices from
+/// `GET /_cat/indices?bytes=b&h=index,store.size` right after the run, before
+/// segment merges settle: that peak is what the disk has to hold. A force-merge
+/// later shrank the real-content stores by roughly 20-40%, so this errs high.
+/// `autoindex-catalog` is omitted: its store size moved by tens of KB in both
+/// directions between runs. For code and prose the per-file intercept comes
+/// out negative, so the fitter uses the steeper of the two measured ratios.
+/// `wall_ms` for code and prose is the wall time of the whole `xerj autoindex`
+/// command, so it still contains the fixed per-run cost.
+///
+/// Synthetic points (data, PDF, unindexed): each is one `xerj autoindex` of
+/// files with distinct tokens. `.npy` files were recorded as junk
 /// (`files_junk` equal to the file count) and their dataset-index store delta
 /// was 0. The two PDF points are about 1 KB and 10 KB; their per-byte slope is
 /// negative, so the fitter uses the steeper of the two measured ratios.
-/// `wall_ms` is the run document's `wall_seconds`. The larger code point took
-/// 1.9s (semantic) and 2.0s (`--no-semantic`); a per-byte time from a run that
-/// short still contains the fixed per-run cost.
-///
-/// Harness (not committed): `python3 /tmp/calibrate_budget.py`. Stdout is
-/// `/tmp/xerj-cal3-results.jsonl` from that run.
 static MEASURED: &[Calib] = &[
     Calib {
         model: Model::Code,
         semantic: true,
         small: Point {
-            files: 1,
-            source_bytes: 8_000,
-            index_bytes: 36_771,
-            wall_ms: 600,
+            files: 5,
+            source_bytes: 291_007,
+            index_bytes: 1_337_452,
+            wall_ms: 2_279,
         },
         large: Point {
-            files: 8,
-            source_bytes: 320_000,
-            index_bytes: 337_814,
-            wall_ms: 1_900,
+            files: 97,
+            source_bytes: 5_096_601,
+            index_bytes: 15_252_875,
+            wall_ms: 5_886,
         },
     },
     Calib {
         model: Model::Code,
         semantic: false,
         small: Point {
-            files: 1,
-            source_bytes: 8_000,
-            index_bytes: 36_771,
-            wall_ms: 600,
+            files: 5,
+            source_bytes: 291_007,
+            index_bytes: 574_967,
+            wall_ms: 1_740,
         },
         large: Point {
-            files: 8,
-            source_bytes: 320_000,
-            index_bytes: 353_621,
-            wall_ms: 2_000,
+            files: 97,
+            source_bytes: 5_096_601,
+            index_bytes: 7_367_909,
+            wall_ms: 5_139,
         },
     },
     Calib {
         model: Model::Prose,
         semantic: true,
         small: Point {
-            files: 1,
-            source_bytes: 8_000,
-            index_bytes: 24_958,
-            wall_ms: 600,
+            files: 24,
+            source_bytes: 520_410,
+            index_bytes: 4_656_359,
+            wall_ms: 1_749,
         },
         large: Point {
-            files: 8,
-            source_bytes: 320_000,
-            index_bytes: 268_967,
-            wall_ms: 600,
+            files: 169,
+            source_bytes: 2_969_566,
+            index_bytes: 15_859_387,
+            wall_ms: 5_308,
         },
     },
     Calib {
         model: Model::Prose,
         semantic: false,
         small: Point {
-            files: 1,
-            source_bytes: 8_000,
-            index_bytes: 24_958,
-            wall_ms: 700,
+            files: 24,
+            source_bytes: 520_410,
+            index_bytes: 748_083,
+            wall_ms: 3_796,
         },
         large: Point {
-            files: 8,
-            source_bytes: 320_000,
-            index_bytes: 269_374,
-            wall_ms: 600,
+            files: 169,
+            source_bytes: 2_969_566,
+            index_bytes: 2_805_069,
+            wall_ms: 3_646,
         },
     },
     Calib {
