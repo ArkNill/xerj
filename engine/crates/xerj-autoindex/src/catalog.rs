@@ -641,8 +641,9 @@ pub fn same_root_other_prefix_line(prefix: &str, others: &[String]) -> String {
     let first = others.first().map(String::as_str).unwrap_or(prefix);
     format!(
         "autoindex: this folder is already indexed under {listed}. This run uses {prefix} and \
-         will index it again. Re-run with --prefix {first}, or DELETE /{first}-* to drop the \
-         other copy."
+         will index it again. Re-run with --prefix {first} to update that copy instead. Both \
+         copies are kept: a {first}-* index can also hold other folders, so nothing here \
+         suggests deleting it."
     )
 }
 
@@ -1545,7 +1546,10 @@ mod prefix_reuse_tests {
         );
         let line = same_root_other_prefix_line("proj", &["ax".into()]);
         assert!(line.contains("under ax"), "{line}");
-        assert!(line.contains("DELETE /ax-*"), "{line}");
+        // `ax` also holds /data/old here, so a delete hint would destroy a
+        // folder this run never touched (#2114).
+        assert!(!line.contains("DELETE"), "{line}");
+        assert!(line.contains("--prefix ax"), "{line}");
         assert_eq!(
             other_prefixes_for_root(&runs, "/data/proj", "ax"),
             vec!["proj".to_string()]
