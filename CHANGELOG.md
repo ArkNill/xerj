@@ -33,6 +33,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A bare hub question that names a language or a technology
+  (`xerj "how do I use async let in Swift"`, `xerj "Swift Result type map"`)
+  routes from the catalogue entry — slug, topics, a language word in the
+  description, then the rest of the description — instead of the term sketch.
+  On the 468-corpus hub the sketch's false positives tied swift-book with
+  unrelated corpora (qwik, docker-docs, harper, oss-review-toolkit) and both
+  questions exited 4. One clear winner is searched on its own. Two or three
+  corpora that share the winning name are searched together and named on one
+  `using:` line. Exit 4 stays for a genuine tie and lists at most five
+  candidates, best first.
+
 - An MCP tool call that cannot connect to `XERJ_URL` now says that no XERJ
   node is listening there, that `xerj mcp` does not start one, and prints
   `xerj --insecure --data-dir ~/xerj-data`. A bare connection error was the
@@ -49,6 +60,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unindexed, and names `--fresh` as the flag that rebuilds the plan in place
   and includes them
   ([#2076](https://github.com/xerj-org/xerj/issues/2076)).
+
+- `xerj autoindex` checks the node's data volume against the disk
+  flood-stage watermark before walking or hashing. A volume already at or
+  over the watermark (default 95%) used to fail only at the first write,
+  after the prepare. The run now stops immediately and reports the free
+  space, the threshold, and `limits.disk_flood_stage_percent`. The probe
+  reads the node (`GET /_cat/allocation?format=json`), not the client's
+  disk. A node that does not report the threshold is unchanged, and
+  `--dry-run` (which writes nothing) is never refused for disk.
+
+- `xerj autoindex` counts the walked folder and estimates the index before
+  hashing. The free-space budget reuses that same allocation row (free bytes
+  under the reported flood-stage watermark; the threshold is not guessed),
+  and `--max-index-size` can lower it. When the default plan does not fit,
+  stdout is a JSON plan list and the run exits 4 until `--yes` takes the
+  recommended plan that fits or `--plan` names one; a named plan runs even over
+  the estimate, with a warning, since the estimate errs high. A kind with no measured ratio stays unmeasured and
+  does not refuse the run. A digit-leading `--prefix` is rejected before the
+  walk ([#2057](https://github.com/xerj-org/xerj/issues/2057)). Skipped files
+  are named after the `ok:` line, and a PDF reuse-fallback line says the PDF
+  is still indexed ([#2056](https://github.com/xerj-org/xerj/issues/2056)).
+  A folder already indexed under another prefix is named before the walk
+  ([#2078](https://github.com/xerj-org/xerj/issues/2078)). MCP:
+  `xerj_index_budget` returns the same estimate and does not index.
 
 - Playground user dashboards resolve their inherited template for chart data
   and panel editing. Cloning a user dashboard retains the underlying template;
