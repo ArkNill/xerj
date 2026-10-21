@@ -115,7 +115,8 @@ pub struct IndexCfg {
     /// space under the node's flood-stage watermark, when the node reports one.
     pub max_index_bytes: Option<u64>,
     /// `--plan`. `None` means the default plan, which is indexed when it fits
-    /// and refused when it does not.
+    /// and refused when it does not. A named plan runs even when the estimate
+    /// says it does not fit (with a warning): that is the override.
     pub budget_plan: Option<String>,
     pub json: bool,
     pub quiet: bool,
@@ -396,8 +397,9 @@ pub fn help_text_with(feedback: bool) -> String {
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x200 is rejected\n\
          \x20\x20\x20\x20--plan <NAME>        index with one plan: default, skip-vendored, skip-data,\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20code-and-docs, no-vectors, cap-1mb,\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20code-and-docs-no-vectors. A plan that does not fit\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20is refused before hashing. See DISK BUDGET.\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20code-and-docs-no-vectors. A named plan runs even\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20when the estimate says it does not fit (warned).\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20See DISK BUDGET.\n\
          \x20\x20\x20\x20--dry-run            walk+sniff+infer, print the plan, index nothing\n\
          \x20\x20\x20\x20--label <FILE>       label each document at ingest through POST /_decide\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20(#1062): the question-set file's noul/choice questions\n\
@@ -685,7 +687,9 @@ pub fn help_text_with(feedback: bool) -> String {
          \x20\x20\x20\x20watermark), optionally lowered with --max-index-size. A node that does\n\
          \x20\x20\x20\x20not report disk.flood_stage is not guessed at. When the default plan\n\
          \x20\x20\x20\x20fits, the run continues. When it does not, stdout carries a JSON plan\n\
-         \x20\x20\x20\x20list and the run exits 4 unless --plan or --yes names a plan that fits.\n\
+         \x20\x20\x20\x20list and the run exits 4 unless --yes takes the recommended plan that\n\
+         \x20\x20\x20\x20fits, or --plan names one (a named plan is the override: it runs\n\
+         \x20\x20\x20\x20over the estimate with a warning; the estimate errs high).\n\
          \x20\x20\x20\x20A terminal with the question visible is asked. Kinds without a\n\
          \x20\x20\x20\x20calibration are reported as unmeasured and do not refuse the run.\n\
          \x20\x20\x20\x20Skipped files are listed after the ok: line (up to 20, then a count).\n\

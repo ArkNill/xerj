@@ -493,7 +493,9 @@ pub(crate) fn assess(req: &Request<'_>) -> Assessment {
         preselect = Preselect::Cancel;
     } else if let Some(name) = req.plan {
         match plans.iter().find(|p| p.name == name) {
-            Some(plan) if plan.fits == Some(false) => preselect = Preselect::Refuse("over"),
+            // A plan named on the command line is the override when the
+            // estimate is wrong: it runs even if the estimate says it does
+            // not fit, with a warning. The flood-stage guard still applies.
             Some(_) => preselect = Preselect::Plan(name.to_string()),
             // `no-vectors` is omitted when the run is already `--no-semantic`:
             // it is the same plan as `default`.
@@ -557,7 +559,7 @@ pub(crate) fn assess(req: &Request<'_>) -> Assessment {
         "plans": plans.iter().map(plan_json).collect::<Vec<_>>(),
         "recommended": recommended,
         "duplicate_prefixes": req.duplicate_prefixes,
-        "accept": "re-run with --plan <name>, or --yes to take the recommended plan that fits. --approve cancel indexes nothing",
+        "accept": "re-run with --plan <name>, or --yes to take the recommended plan that fits. A named plan runs even when the estimate says it does not fit (the estimate errs high). --approve cancel indexes nothing",
         "calibration": CALIBRATION_NOTE,
     });
 
@@ -583,7 +585,6 @@ pub fn resolve(assessment: &Assessment, choice: Choice) -> Outcome {
         let mut body = assessment.body.clone();
         body["exit_code"] = json!(gate::EXIT_NEEDS_DECISION);
         body["refused"] = json!(match why {
-            "over" => "the named plan does not fit the budget",
             "none" => "no plan fits the budget",
             _ => "unknown plan",
         });
@@ -621,15 +622,6 @@ pub fn resolve(assessment: &Assessment, choice: Choice) -> Outcome {
         };
     };
     match assessment.plans.iter().find(|p| p.name == name) {
-        Some(plan) if plan.fits == Some(false) => {
-            let mut body = assessment.body.clone();
-            body["exit_code"] = json!(gate::EXIT_NEEDS_DECISION);
-            body["refused"] = json!(format!("{name} does not fit the budget"));
-            Outcome::Stop {
-                code: gate::EXIT_NEEDS_DECISION,
-                body,
-            }
-        }
         Some(plan) if plan.keep.as_ref().is_some_and(|kept| kept.is_empty()) => {
             let mut body = assessment.body.clone();
             body["exit_code"] = json!(gate::EXIT_NEEDS_DECISION);
@@ -1135,8 +1127,14 @@ fn continue_note(plan: &PlanEst, budget: Option<u64>, basis: &str) -> String {
     } else {
         format!(" ({basis})")
     };
+    let over = if plan.fits == Some(false) {
+        ". warning: the estimate is over the budget; running because the plan was named. \
+         The node's flood-stage watermark still stops writes"
+    } else {
+        ""
+    };
     format!(
-        "--plan {} keeps {}{drops}. {} Budget {budget}{basis}",
+        "--plan {} keeps {}{drops}. {} Budget {budget}{basis}{over}",
         plan.name,
         count_phrase(plan.files, "file", "files"),
         plan_size_phrase(plan)
@@ -1164,7 +1162,7 @@ fn summary_lines(
             None => "is not compared (unmeasured, or no budget)",
         };
         lines.push(format!(
-            "budget: default plan {fit}. {} . budget {} ({basis})",
+            "budget: default plan {fit}: {}. budget {} ({basis})",
             plan_size_phrase(default),
             budget.map(human_bytes).unwrap_or_else(|| "unset".into())
         ));
@@ -1493,6 +1491,29 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn a_named_plan_over_the_estimate_runs_with_a_warning() {
+        let files = sample_files();
+        let assessment = assess(&Request {
+            root: "/data",
+            files: &files,
+            volume: None,
+            max_index_bytes: Some(1),
+            no_semantic: true,
+            plan: Some("default"),
+            approve: None,
+            duplicate_prefixes: &[],
+        });
+        assert!(!assessment.needs_choice, "{}", assessment.body);
+        match resolve(&assessment, Choice::Absent) {
+            Outcome::Continue { keep, note, .. } => {
+                assert!(keep.is_none(), "default keeps every file");
+                assert!(note.contains("over the budget"), "{note}");
+            }
+            Outcome::Stop { code, body } => panic!("stopped with {code}: {body}"),
+        }
     }
 
     #[test]
