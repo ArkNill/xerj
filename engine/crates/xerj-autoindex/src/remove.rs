@@ -286,6 +286,50 @@ pub fn plan_remove(
     let single = roots.len() <= 1;
     let deciding = selected_key.is_some() && !needs_root && !root_not_found;
 
+    // Runs of another prefix, by run id, and their prefixes. A `{prefix}-`
+    // match on a dataset name is not ownership: `ax-2-docs` starts with `ax-`.
+    // A row whose run belongs to another prefix, or a slug-less row whose
+    // index sits under a longer sibling prefix, is that prefix's, not ours.
+    let mut foreign_runs: BTreeSet<String> = BTreeSet::new();
+    let mut sibling_prefixes: BTreeSet<String> = BTreeSet::new();
+    for doc in &docs {
+        if kind(doc) != "run" || run_matches_prefix(doc, prefix) {
+            continue;
+        }
+        foreign_runs.insert(run_identity(doc));
+        foreign_runs.insert(doc.id.clone());
+        if let Some(other) = doc
+            .source
+            .get("prefix")
+            .or_else(|| doc.source.get(catalog::CORPUS_SCOPE_FIELD))
+            .and_then(Value::as_str)
+        {
+            if other.len() > prefix.len() && other.starts_with(&format!("{prefix}-")) {
+                sibling_prefixes.insert(other.to_string());
+            }
+        }
+    }
+    let foreign = |source: &Value| -> bool {
+        let run_id = source.get("run_id").and_then(Value::as_str).unwrap_or("");
+        if !run_id.is_empty() && foreign_runs.contains(run_id) {
+            return true;
+        }
+        let slugless = source
+            .get("slug")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty);
+        let names: Vec<&str> = ["index_name", "a_index", "b_index"]
+            .iter()
+            .filter_map(|k| source.get(*k).and_then(Value::as_str))
+            .collect();
+        slugless
+            && names.iter().any(|name| {
+                sibling_prefixes
+                    .iter()
+                    .any(|other| name.starts_with(&format!("{other}-")))
+            })
+    };
+
     let mut rows = Vec::new();
     let mut kept_rows = Vec::new();
     let mut delete_index_names: BTreeMap<String, (u64, u64)> = BTreeMap::new();
@@ -322,7 +366,7 @@ pub fn plan_remove(
             "correlation" => catalog::correlation_matches_prefix(&doc.source, prefix),
             _ => false,
         };
-        if !belongs {
+        if !belongs || foreign(&doc.source) {
             continue;
         }
         let owned = owns_row(&doc.source, &selected_ids, single);
@@ -1007,6 +1051,44 @@ mod tests {
 
     fn row_ids(plan: &RemovePlan) -> Vec<String> {
         plan.rows.iter().map(|r| r.id.clone()).collect()
+    }
+
+    #[test]
+    fn a_sibling_prefix_dataset_is_never_ours() {
+        // A legacy row with no slug: `ax-2-docs` starts with `ax-`, but the
+        // catalog names a run of prefix `ax-2` for it. Removing `ax` keeps it,
+        // and keeps it even when the row carries no run id at all.
+        let mut docs = vec![
+            run("run:a", "ax", "/data/a", "2026-01-01T00:00:00Z"),
+            dataset("ds:ax:docs", "ax-docs", "docs", "a", 5, 50),
+            doc(
+                "run:other",
+                json!({"doc_kind":"run","prefix":"ax-2","root":"/data/other",
+                       "run_id":"other","started":"2026-03-01T00:00:00Z"}),
+            ),
+            doc(
+                "ds:ax-2:docs",
+                json!({"doc_kind":"dataset","index_name":"ax-2-docs","run_id":"other",
+                       "record_count":9,"bytes":90}),
+            ),
+            doc(
+                "ds:ax-2:code",
+                json!({"doc_kind":"dataset","index_name":"ax-2-code",
+                       "record_count":3,"bytes":30}),
+            ),
+        ];
+        docs.push(dataset("ds:ax:code", "ax-code", "code", "a", 1, 10));
+        let plan = plan_remove("ax", None, &docs, &[]);
+        assert!(!plan.needs_root, "{plan:?}");
+        let n = names(&plan);
+        assert_eq!(
+            n,
+            vec!["ax-code".to_string(), "ax-docs".to_string()],
+            "{n:?}"
+        );
+        let ids = row_ids(&plan);
+        assert!(!ids.iter().any(|id| id.starts_with("ds:ax-2")), "{ids:?}");
+        assert!(!ids.contains(&"run:other".to_string()), "{ids:?}");
     }
 
     #[test]
