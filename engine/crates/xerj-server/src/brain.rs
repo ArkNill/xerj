@@ -635,6 +635,7 @@ fn index_cfg(cfg: &BrainCfg, brain: &str, api_key: Option<String>) -> IndexCfg {
         brain: Some(brain.to_string()),
         no_graph: false,
         dry_run: false,
+        walk_only: false,
         // The estimate/decision gate is an `xerj autoindex` CLI feature, and
         // `xerj brain` has no `--approve` of its own to answer it with. Arming
         // it here would stop the run with exit 4 and instructions the caller
@@ -644,6 +645,7 @@ fn index_cfg(cfg: &BrainCfg, brain: &str, api_key: Option<String>) -> IndexCfg {
         approve: None,
         max_index_bytes: None,
         budget_plan: None,
+        drop_indexed: false,
         json: false,
         quiet: false,
         // `xerj brain` is a foreground command a human watches; it gets the

@@ -42,6 +42,7 @@ pub mod order;
 pub mod pool;
 pub mod progress;
 mod reconcile_plan;
+pub mod remove;
 pub mod resources;
 pub mod search;
 pub mod sniff;
@@ -1868,6 +1869,7 @@ pub fn run_cli() -> i32 {
         Cmd::Index(cfg) => run_index(*cfg),
         Cmd::Map(cfg) => run_map(cfg),
         Cmd::Status(cfg) => run_status(cfg),
+        Cmd::Remove(cfg) => run_remove(cfg),
         Cmd::Watch(cfg) => objwatch::run::run(*cfg),
     };
     match res {
@@ -3523,7 +3525,9 @@ mod phase_a_grouping_tests {
             approve: None,
             max_index_bytes: None,
             budget_plan: None,
+            drop_indexed: false,
             dry_run: true,
+            walk_only: false,
             json: false,
             quiet: true,
             progress: crate::progress::ProgressMode::None,
@@ -6416,6 +6420,9 @@ fn legacy_rebuild_argv(cfg: &IndexCfg, state_dir: &Path, prefix: &str) -> Vec<St
         argv.push("--plan".to_owned());
         argv.push(plan.clone());
     }
+    if cfg.drop_indexed {
+        argv.push("--drop-indexed".to_owned());
+    }
     if cfg.follow_symlinks {
         argv.push("--follow-symlinks".to_owned());
     }
@@ -6979,6 +6986,43 @@ fn run_index_report_inner(
     for line in ignore_report.summary_lines() {
         pr.note(&format!("autoindex: {line}"));
     }
+    // `--walk-only` (#1912) is the map of a tree that has not been indexed yet.
+    // The walk above is the same one `--dry-run` runs, and `summary_lines` is
+    // the same ignore report. Hashing is the next step, and it reads every
+    // admitted byte — on a large drive that is the day-long part. Return
+    // before it. `walk_only` implies `dry_run`, so a pending generation or an
+    // object download already returned above without writing.
+    if cfg.walk_only {
+        let summary = walk::summarise_walk_only(&root_str, &discovered_files, &ignore_report);
+        if cfg.json {
+            println!("{}", serde_json::to_string_pretty(&summary)?);
+        } else {
+            print!("{}", summary.render());
+        }
+        pr.note(
+            "(walk-only — stopped before hashing; file contents were not hashed and nothing was indexed)",
+        );
+        pr.finish_with_flags(
+            true,
+            0,
+            "walk-only",
+            &[
+                ("files", summary.files),
+                ("bytes", summary.bytes),
+                ("ignored_files", ignore_report.files_skipped),
+                ("ignored_dirs", ignore_report.dirs_pruned),
+                (
+                    "ignored_files_in_pruned_dirs",
+                    ignore_report.files_inside_pruned_dirs,
+                ),
+            ],
+            &[(
+                "ignored_files_in_pruned_dirs_exact",
+                ignore_report.files_inside_pruned_dirs_is_exact(),
+            )],
+        );
+        return Ok((0, None));
+    }
     // An empty folder is only "nothing to do" when there is also no durable
     // state: with a journal present, zero files is a deletion of the whole
     // corpus and has to be reconciled, not shrugged off.
@@ -7043,9 +7087,59 @@ fn run_index_report_inner(
                 keep,
                 no_semantic,
                 note,
+                plan_name,
             } => {
                 if no_semantic {
                     cfg.no_semantic = true;
+                }
+                // A reduced plan filters the walk before hashing and before
+                // either reconcile. Files it leaves out are then absent from
+                // the inventory: the `--no-graph` generation emits Delete for
+                // their groups, and the graph path classifies them as
+                // exclusions and sweeps their documents. Both are silent
+                // deletions of data that is still in the folder. Stop and
+                // list them unless `--drop-indexed` is the explicit yes.
+                // `--plan` and `--yes` choose what to index; they do not
+                // agree to delete what is already indexed.
+                if let Some(keep_rels) = keep.as_ref() {
+                    let mut plans: Vec<&Plan> = Vec::new();
+                    if let Some(manifest) = preflight.committed_manifest.as_ref() {
+                        plans.push(&manifest.plan);
+                    }
+                    if let Some(plan) = preflight.plan.as_ref() {
+                        plans.push(plan);
+                    }
+                    let name = plan_name.as_deref().unwrap_or("reduced");
+                    if let Some(body) =
+                        budget::removal_decision(name, &plans, &discovered_files, keep_rels)
+                    {
+                        if !cfg.drop_indexed {
+                            println!("{}", serde_json::to_string(&body)?);
+                            pr.note(&format!(
+                                "autoindex: {}",
+                                body["accept"]
+                                    .as_str()
+                                    .unwrap_or("a reduced plan would delete already-indexed files")
+                            ));
+                            pr.finish(false, gate::EXIT_NEEDS_DECISION, "needs-decision", &[]);
+                            return Ok((gate::EXIT_NEEDS_DECISION, None));
+                        }
+                        pr.note(&format!(
+                            "autoindex: --drop-indexed: removing {} already-indexed file(s) this \
+                             plan leaves out",
+                            body["would_remove_total"].as_u64().unwrap_or(0)
+                        ));
+                    } else if cfg.drop_indexed {
+                        pr.note(
+                            "autoindex: --drop-indexed: this plan leaves out no already-indexed \
+                             file",
+                        );
+                    }
+                } else if cfg.drop_indexed {
+                    pr.note(
+                        "autoindex: --drop-indexed confirms removal of files a reduced plan \
+                         leaves out, and this run keeps every walked file",
+                    );
                 }
                 if let Some(keep) = keep {
                     let keep: std::collections::HashSet<String> = keep.into_iter().collect();
@@ -9366,11 +9460,28 @@ fn run_index_report_inner(
     // phase — split into named sub-phases because the mix of one-shot refreshes
     // and per-dataset round trips has no single honest denominator.
     pr.phase("finalize-refresh", 1 + graph.is_some() as u64, 0);
-    es.refresh(&format!("{}-*", cfg.prefix)).ok();
+    // #1635: a refresh that never returns used to sit here at items=0 with
+    // no error (`rate=unknown`). The server now fails the stuck index by
+    // name. Swallowing that (`.ok()`) turned the failure back into a green
+    // run whose documents were not all refreshed.
+    let pattern = format!("{}-*", cfg.prefix);
+    es.refresh(&pattern).map_err(|error| {
+        anyhow::anyhow!(
+            "finalize-refresh of {pattern} failed: {error:#}. The server names the index that \
+             did not refresh; documents already written stay indexed and rerunning the same \
+             command resumes"
+        )
+    })?;
     pr.item_done(0);
     // The dot-prefixed edges index is outside the {prefix}-* pattern.
     if let Some(gr) = &graph {
-        es.refresh(&gr.edges_index).ok();
+        es.refresh(&gr.edges_index).map_err(|error| {
+            anyhow::anyhow!(
+                "finalize-refresh of {} failed: {error:#}. Documents already written stay \
+                 indexed and rerunning the same command resumes",
+                gr.edges_index
+            )
+        })?;
         pr.item_done(0);
     }
 
@@ -10360,6 +10471,34 @@ mod node_ping_failure_tests {
         assert!(!msg.contains("no XERJ node reachable"), "{msg}");
         assert!(!msg.contains("xerj --insecure"), "{msg}");
     }
+}
+
+fn run_remove(cfg: cli::RemoveCfg) -> Result<i32> {
+    if let Some(note) = &cfg.xerj_url_note {
+        eprintln!("autoindex: {note}");
+    }
+    // `--quiet` is the indexing gate's "do not prompt" switch. The same rule
+    // here: a silenced terminal must not ask a question nobody will see.
+    let prompt = {
+        use std::io::IsTerminal;
+        std::io::stdin().is_terminal() && !cfg.quiet
+    };
+    let report = remove::execute(remove::RemoveRequest {
+        url: cfg.url,
+        api_key: cfg.api_key,
+        prefix: cfg.prefix,
+        root: cfg.root,
+        yes: cfg.yes,
+        prompt,
+    })?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report.body).unwrap_or_else(|_| report.body.to_string())
+    );
+    if !cfg.quiet {
+        eprintln!("{}", report.summary);
+    }
+    Ok(report.exit_code)
 }
 
 fn run_map(cfg: MapCfg) -> Result<i32> {
@@ -13441,6 +13580,8 @@ mod legacy_rebuild_argv_tests {
         assert_eq!(rebuilt.sample, cfg.sample);
         assert_eq!(rebuilt.workers, cfg.workers);
         assert_eq!(rebuilt.bulk_mb, cfg.bulk_mb);
+        assert_eq!(rebuilt.budget_plan, cfg.budget_plan, "{argv:?}");
+        assert_eq!(rebuilt.drop_indexed, cfg.drop_indexed, "{argv:?}");
     }
 
     #[test]
@@ -13468,6 +13609,13 @@ mod legacy_rebuild_argv_tests {
         assert_round_trip(&["data", "--no-graph", "--max-file-mb", "10"]);
         assert_round_trip(&["data", "--no-graph", "--max-file-bytes", "4096"]);
         assert_round_trip(&["data", "--no-graph", "--max-file-gb", "3"]);
+        assert_round_trip(&[
+            "data",
+            "--no-graph",
+            "--plan",
+            "code-and-docs",
+            "--drop-indexed",
+        ]);
     }
 
     /// #1233: the "skipped: oversized" note renders the byte cap in the

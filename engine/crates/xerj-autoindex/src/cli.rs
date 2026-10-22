@@ -86,7 +86,8 @@ pub struct IndexCfg {
     /// existence-only name card, contents never opened.
     pub stub_globs: Vec<String>,
     /// `.gitignore` / `.xerjignore` / built-in build-output rules (#276).
-    /// `deep_count` is set from `--dry-run`.
+    /// `deep_count` is set from `--dry-run` (and from `--walk-only`, which
+    /// implies it).
     pub ignore: IgnoreOptions,
     /// Whole-file size cap in BYTES for non-streaming families (JSON, HTML,
     /// prose, PDF, …). Streaming families are never capped. Set on the CLI by
@@ -105,6 +106,10 @@ pub struct IndexCfg {
     /// Disable edge detection entirely (no `.xerj-memory-*-edges` writes).
     pub no_graph: bool,
     pub dry_run: bool,
+    /// `--walk-only`: print the per-folder walk summary and return before
+    /// hashing. The parser also sets [`Self::dry_run`], so nothing is indexed.
+    /// `--dry-run` without this flag still hashes, sniffs and prints the plan.
+    pub walk_only: bool,
     /// Stop and ask before indexing when phase A's measured estimate exceeds
     /// this many minutes. `0` disables the gate outright.
     pub max_minutes: u64,
@@ -118,6 +123,10 @@ pub struct IndexCfg {
     /// and refused when it does not. A named plan runs even when the estimate
     /// says it does not fit (with a warning): that is the override.
     pub budget_plan: Option<String>,
+    /// `--drop-indexed`. Confirms that a reduced plan may delete files it
+    /// leaves out when those files are already indexed. Without it that
+    /// re-run exits 4 and lists them. `--plan` and `--yes` do not set this.
+    pub drop_indexed: bool,
     pub json: bool,
     pub quiet: bool,
     /// Progress surface. Orthogonal to `json`: `--json` shapes *stdout* (the
@@ -179,6 +188,25 @@ pub struct StatusCfg {
     pub xerj_url_note: Option<String>,
 }
 
+/// `xerj autoindex remove --prefix P [--root DIR]`.
+///
+/// Deletes one autoindexed folder after printing the plan. `--prefix` is
+/// required: the default name `ax` is shared, and guessing it is how an agent
+/// deletes another project's index. `--yes` confirms. It does not choose a
+/// folder when the prefix holds more than one.
+#[derive(Debug, Clone)]
+pub struct RemoveCfg {
+    pub url: String,
+    pub api_key: Option<String>,
+    pub prefix: String,
+    pub root: Option<String>,
+    pub yes: bool,
+    /// Accepted. Stdout is the JSON plan either way.
+    pub json: bool,
+    pub quiet: bool,
+    pub xerj_url_note: Option<String>,
+}
+
 /// `xerj autoindex s3://bucket/prefix --watch`: poll a bucket and emit a change
 /// feed. Deliberately its own config rather than fields on [`IndexCfg`]: the
 /// watch path shares no phase-A/phase-B machinery with folder indexing, and
@@ -225,6 +253,7 @@ pub enum Cmd {
     Index(Box<IndexCfg>),
     Map(MapCfg),
     Status(StatusCfg),
+    Remove(RemoveCfg),
     /// Boxed for the same reason as `Index`.
     Watch(Box<WatchCfg>),
     Help,
@@ -275,6 +304,11 @@ pub fn help_text_with(feedback: bool) -> String {
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20discover + index objects in a bucket\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20(r2:// too; see OBJECT STORAGE)\n\
          \x20\x20\x20\x20xerj autoindex map [OPTIONS]          print the discovered data map\n\
+         \x20\x20\x20\x20xerj autoindex remove --prefix <P> [--root <DIR>] [--yes]\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20list one folder's indices and catalog rows,\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20then delete them. Nothing is deleted without\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20--yes or a terminal y. Another folder under\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20the same prefix is left in place\n\
          \x20\x20\x20\x20xerj autoindex status [OPTIONS]       resume-journal + index progress view\n\
          \x20\x20\x20\x20xerj autoindex s3://bucket/prefix --watch [OPTIONS]\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20poll object storage and emit a change feed\n\
@@ -390,7 +424,14 @@ pub fn help_text_with(feedback: bool) -> String {
          \x20\x20\x20\x20--yes, -y            alias for --approve proceed. When the default index\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20plan does not fit the disk budget, --yes takes the\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20recommended plan that does fit. It does not index a\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20plan that is over budget.\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20plan that is over budget. It does not delete indexed\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20files a smaller plan leaves out; that is --drop-indexed.\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20On `autoindex remove` it is the confirmation: without\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20it a non-terminal run prints the plan and exits 4.\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20It does not choose a folder.\n\
+         \x20\x20\x20\x20--root <DIR>         (`autoindex remove`) the one folder to drop when\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20--prefix holds more than one. Refused on any other\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20command\n\
          \x20\x20\x20\x20--max-index-size <N> cap the estimated index (bytes, or a KB/MB/GB suffix).\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20The disk budget is the free space under the node's\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20flood-stage watermark; this flag lowers that cap.\n\
@@ -400,7 +441,17 @@ pub fn help_text_with(feedback: bool) -> String {
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20code-and-docs-no-vectors. A named plan runs even\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20when the estimate says it does not fit (warned).\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20See DISK BUDGET.\n\
+         \x20\x20\x20\x20--drop-indexed       delete already-indexed files a reduced plan leaves\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20out. Without this flag that re-run exits 4 and lists\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20them. --plan and --yes do not agree to the deletion.\n\
          \x20\x20\x20\x20--dry-run            walk+sniff+infer, print the plan, index nothing\n\
+         \x20\x20\x20\x20--walk-only          stop after the walk. Prints each top-level folder's\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20file count and size, what the ignore rules would drop\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20and which rule, and the totals. Stops before hashing:\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20no digest, no sniff, nothing indexed. Ignore files are\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20still read, as on every walk. The node is still\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20contacted, as with --dry-run. --dry-run itself still\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20hashes, sniffs and prints the plan\n\
          \x20\x20\x20\x20--label <FILE>       label each document at ingest through POST /_decide\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20(#1062): the question-set file's noul/choice questions\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20are rendered against each record's fields and the vote\n\
@@ -454,7 +505,7 @@ pub fn help_text_with(feedback: bool) -> String {
          \x20\x20\x20\x20preference should not silently decide what is in your index.\n\
          \x20\x20\x20\x20A directory the rules reject is never descended, so nothing inside it is\n\
          \x20\x20\x20\x20stat-ed, hashed or sent. Every run prints what was dropped and by which\n\
-         \x20\x20\x20\x20rule; --dry-run additionally counts the non-hidden files inside each\n\
+         \x20\x20\x20\x20rule; --dry-run and --walk-only additionally count the non-hidden files inside each\n\
          \x20\x20\x20\x20pruned directory (bounded — past the budget the count is reported as\n\
          \x20\x20\x20\x20`at least N`, and xerj-done carries\n\
          \x20\x20\x20\x20ignored_files_in_pruned_dirs_exact=false to say so).\n\
@@ -690,6 +741,11 @@ pub fn help_text_with(feedback: bool) -> String {
          \x20\x20\x20\x20list and the run exits 4 unless --yes takes the recommended plan that\n\
          \x20\x20\x20\x20fits, or --plan names one (a named plan is the override: it runs\n\
          \x20\x20\x20\x20over the estimate with a warning; the estimate errs high).\n\
+         \x20\x20\x20\x20A reduced plan on a folder that is already indexed does not delete\n\
+         \x20\x20\x20\x20the files it leaves out. That re-run exits 4 and lists the files\n\
+         \x20\x20\x20\x20and the datasets a reconcile would remove, until --drop-indexed\n\
+         \x20\x20\x20\x20confirms it. --yes chooses a plan; it does not agree to delete\n\
+         \x20\x20\x20\x20indexed data.\n\
          \x20\x20\x20\x20A terminal with the question visible is asked. Kinds without a\n\
          \x20\x20\x20\x20calibration are reported as unmeasured and do not refuse the run.\n\
          \x20\x20\x20\x20Skipped files are listed after the ok: line (up to 20, then a count).\n\
@@ -715,10 +771,13 @@ pub fn help_text_with(feedback: bool) -> String {
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20rebuild the plan in place and include them. Read `reason`\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20to tell this apart from completed-with-junk;\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x204 NEEDS A DECISION — the estimate exceeded --max-minutes, the\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20estimated index does not fit the disk budget, or a --watch\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20poll cost more than --max-monthly-ops; nothing was indexed\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20and a JSON decision request is on stdout. A plan that does\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20not fit is not started, including with --yes;\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20estimated index does not fit the disk budget, a reduced\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20plan would delete files that are already indexed, or a\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20--watch poll cost more than --max-monthly-ops; nothing was\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20indexed and a JSON decision request is on stdout. A plan\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20that does not fit is not started, including with --yes.\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20Already-indexed files are not deleted unless --drop-indexed\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20is also set;\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x202 usage; 1 endpoint/journal failure, a refused corpus removal, or a\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20refused unsafe state transition\n",
         feedback_block = xerj_common::feedback::block(feedback),
@@ -859,13 +918,21 @@ pub fn parse(args: Vec<String>) -> Result<Cmd, String> {
     let mut watch = false;
     let mut debounce_ms: Option<u64> = None;
     let mut dry_run = false;
+    let mut walk_only = false;
     let mut max_minutes = DEFAULT_MAX_MINUTES;
     let mut max_minutes_explicit = false;
     let mut approve: Option<Approval> = None;
     let mut approve_explicit = false;
+    // Set only by `--yes`/`-y`. `--approve proceed` is the indexing gate and
+    // is not a confirmation for `autoindex remove`.
+    let mut yes_flag = false;
+    let mut remove_root: Option<String> = None;
+    let mut markdown = false;
+    let mut code_analyzer_explicit = false;
     let mut max_index_bytes: Option<u64> = None;
     let mut max_index_explicit = false;
     let mut budget_plan: Option<String> = None;
+    let mut drop_indexed = false;
     let mut json = false;
     let mut quiet = false;
     let mut progress: Option<ProgressMode> = None;
@@ -1109,6 +1176,12 @@ pub fn parse(args: Vec<String>) -> Result<Cmd, String> {
                 }
                 budget_plan = Some(raw);
             }
+            "--drop-indexed" => {
+                if drop_indexed {
+                    return Err("--drop-indexed was given twice".into());
+                }
+                drop_indexed = true;
+            }
             "--yes" | "-y" => {
                 if let Some(previous) = approve {
                     if previous != Approval::Proceed {
@@ -1120,15 +1193,30 @@ pub fn parse(args: Vec<String>) -> Result<Cmd, String> {
                 }
                 approve = Some(Approval::Proceed);
                 approve_explicit = true;
+                yes_flag = true;
             }
             "--dry-run" => dry_run = true,
+            "--walk-only" => walk_only = true,
             "--json" => json = true,
-            "--md" => json = false,
+            "--md" => {
+                json = false;
+                markdown = true;
+            }
             "--code-analyzer" => {
                 let raw = it
                     .next()
                     .ok_or("--code-analyzer needs a value: standard or code")?;
                 code_analyzer = crate::infer::CodeAnalyzer::parse(&raw)?;
+                code_analyzer_explicit = true;
+            }
+            "--root" => {
+                let raw = it
+                    .next()
+                    .ok_or("--root needs a directory: `autoindex remove --root <DIR>`")?;
+                if remove_root.is_some() {
+                    return Err("--root was given twice".into());
+                }
+                remove_root = Some(raw);
             }
             "--progress" => {
                 let raw = it
@@ -1267,6 +1355,7 @@ pub fn parse(args: Vec<String>) -> Result<Cmd, String> {
             "--help" | "-h" => return Ok(Cmd::Help),
             "map" if sub.is_none() && folder.is_none() => sub = Some("map".into()),
             "status" if sub.is_none() && folder.is_none() => sub = Some("status".into()),
+            "remove" if sub.is_none() && folder.is_none() => sub = Some("remove".into()),
             other if !other.starts_with('-') && folder.is_none() && sub.is_none() => {
                 root_raw = Some(other.to_string());
                 folder = Some(PathBuf::from(other))
@@ -1275,6 +1364,12 @@ pub fn parse(args: Vec<String>) -> Result<Cmd, String> {
             // Say what the command does (one folder per run) and show the
             // two-run form with a distinct --prefix, so an agent that read
             // "unknown argument: repoB" does not conclude repoA was refused.
+            other if !other.starts_with('-') && sub.as_deref() == Some("remove") => {
+                return Err(format!(
+                    "`autoindex remove` takes the folder as --root, not as a positional \
+                     argument. Try: xerj autoindex remove --prefix <P> --root {other}"
+                ));
+            }
             other if !other.starts_with('-') && folder.is_some() && sub.is_none() => {
                 let first = folder
                     .as_ref()
@@ -1328,7 +1423,10 @@ pub fn parse(args: Vec<String>) -> Result<Cmd, String> {
     // Only meaningful for a run that walks a folder. On `map`/`status` neither
     // flag does anything at all, and the arm below says so — a message about
     // one flag subsuming the other would imply the pair is otherwise honoured.
-    let sub_walks_a_folder = !matches!(sub.as_deref(), Some("map") | Some("status"));
+    let sub_walks_a_folder = !matches!(
+        sub.as_deref(),
+        Some("map") | Some("status") | Some("remove")
+    );
     if no_ignore && no_default_ignores && sub_walks_a_folder {
         return Err(
             "--no-ignore already turns off the built-in default rules that --no-default-ignores \
@@ -1361,6 +1459,28 @@ pub fn parse(args: Vec<String>) -> Result<Cmd, String> {
     if approve == Some(Approval::Fast) {
         no_semantic = true;
         no_graph = true;
+    }
+    // `--walk-only` is a dry run that returns after the walk. Implying
+    // `dry_run` here, before the contradiction checks and the object-watch
+    // router, keeps every "index nothing" guard armed. `--dry-run` alone
+    // leaves `walk_only` false, so that path still hashes and prints the plan.
+    if walk_only && watch {
+        return Err(
+            "--walk-only and --watch contradict each other: a walk-only run stops after the \
+             folder walk and indexes nothing, and a watcher exists to index changes as they \
+             land. Drop one of the two"
+                .into(),
+        );
+    }
+    if walk_only && (max_minutes_explicit || approve_explicit) {
+        return Err(
+            "--max-minutes/--approve/--yes are the indexing decision gate, which --walk-only \
+             never reaches: it stops after the walk and does not sniff or index. Drop them"
+                .into(),
+        );
+    }
+    if walk_only {
+        dry_run = true;
     }
     if approve == Some(Approval::Cancel) && dry_run {
         return Err(
@@ -1594,10 +1714,16 @@ pub fn parse(args: Vec<String>) -> Result<Cmd, String> {
                     .into(),
             );
         }
-        if max_minutes_explicit || approve_explicit || max_index_explicit || budget_plan.is_some() {
+        if max_minutes_explicit
+            || approve_explicit
+            || max_index_explicit
+            || budget_plan.is_some()
+            || drop_indexed
+        {
             return Err(
-                "--max-minutes/--approve/--yes/--max-index-size/--plan are the folder-indexing \
-                 gate; a watch has its own cost gate (--max-monthly-ops, --allow-cost)"
+                "--max-minutes/--approve/--yes/--max-index-size/--plan/--drop-indexed are the \
+                 folder-indexing gate; a watch has its own cost gate (--max-monthly-ops, \
+                 --allow-cost)"
                     .into(),
             );
         }
@@ -1669,16 +1795,79 @@ pub fn parse(args: Vec<String>) -> Result<Cmd, String> {
         })));
     }
 
+    if remove_root.is_some() && sub.as_deref() != Some("remove") {
+        return Err(
+            "--root names the folder `autoindex remove` drops. It is only supported with \
+             `autoindex remove --prefix <P> --root <DIR>`."
+                .into(),
+        );
+    }
+
     match (sub.as_deref(), folder) {
+        (Some("remove"), _) => remove_cmd(RemoveParse {
+            cfg: RemoveCfg {
+                url,
+                api_key,
+                prefix,
+                root: remove_root,
+                yes: yes_flag,
+                json,
+                quiet,
+                xerj_url_note,
+            },
+            prefix_explicit,
+            approve_set: approve.is_some(),
+            markdown,
+            reject: RemoveReject {
+                dry_run,
+                replace_prefix,
+                state_dir: state_dir.is_some(),
+                fresh,
+                workers: workers.is_some(),
+                pdf_workers: pdf_workers.is_some(),
+                pdf_timeout: pdf_timeout_secs != 120,
+                bulk_mb: bulk_mb != 8,
+                bulk_timeout: bulk_timeout_explicit,
+                snapshot: snapshot_max_bytes != (64u64 << 30),
+                follow_symlinks,
+                follow_symlinks_outside_root,
+                stubs: !stub_globs.is_empty(),
+                ignore: !ignore_flags_used.is_empty(),
+                max_file: max_file_bytes.is_some(),
+                sample: sample != 500,
+                no_semantic,
+                code_analyzer: code_analyzer_explicit,
+                brain: brain.is_some(),
+                no_graph,
+                watch,
+                debounce: debounce_ms.is_some(),
+                watch_flags: !watch_flags_used.is_empty(),
+                label: label.is_some(),
+                dataset: dataset.is_some(),
+                paging: detail_offset.is_some() || detail_limit.is_some(),
+                progress: progress_explicit,
+                endpoint: endpoint_explicit,
+                max_minutes: max_minutes_explicit,
+                max_index: max_index_explicit,
+                plan: budget_plan.is_some(),
+                walk_only,
+            },
+        }),
+        (Some("map"), _) | (Some("status"), _) if walk_only => Err(format!(
+            "--walk-only summarises a folder walk and does not apply to `autoindex {}`: that \
+             subcommand never walks a tree. Drop it",
+            sub.as_deref().unwrap_or_default()
+        )),
         (Some("map"), _) | (Some("status"), _)
             if max_minutes_explicit
                 || approve_explicit
                 || max_index_explicit
-                || budget_plan.is_some() =>
+                || budget_plan.is_some()
+                || drop_indexed =>
         {
             Err(format!(
-                "--max-minutes/--approve/--yes/--max-index-size/--plan apply only to indexing, \
-                 not `autoindex {}`",
+                "--max-minutes/--approve/--yes/--max-index-size/--plan/--drop-indexed apply only \
+                 to indexing, not `autoindex {}`",
                 sub.as_deref().unwrap_or_default()
             ))
         }
@@ -1761,6 +1950,13 @@ pub fn parse(args: Vec<String>) -> Result<Cmd, String> {
                         .into(),
                 );
             }
+            if walk_only && label.is_some() {
+                return Err(
+                    "--walk-only and --label contradict each other: a walk-only run indexes \
+                     nothing, so there is nowhere for the decide labels to go. Drop one of the two"
+                        .into(),
+                );
+            }
             if dry_run && label.is_some() {
                 return Err(
                     "--dry-run and --label contradict each other: a dry run indexes nothing, so \
@@ -1801,8 +1997,9 @@ pub fn parse(args: Vec<String>) -> Result<Cmd, String> {
                 ignore: IgnoreOptions {
                     enabled: !no_ignore,
                     defaults: !no_ignore && !no_default_ignores,
-                    // Only --dry-run pays for counting what is inside a pruned
-                    // directory; a real run's whole point is not touching it.
+                    // Only --dry-run and --walk-only (which implies --dry-run)
+                    // pay for counting what is inside a pruned directory; a
+                    // real run's whole point is not touching it.
                     deep_count: dry_run,
                 },
                 max_file_bytes: max_file_bytes.unwrap_or(2u64 << 30),
@@ -1812,10 +2009,12 @@ pub fn parse(args: Vec<String>) -> Result<Cmd, String> {
                 brain,
                 no_graph,
                 dry_run,
+                walk_only,
                 max_minutes,
                 approve,
                 max_index_bytes,
                 budget_plan,
+                drop_indexed,
                 json,
                 quiet,
                 progress,
@@ -1834,11 +2033,137 @@ pub fn parse(args: Vec<String>) -> Result<Cmd, String> {
         // `--help` / `-h` still return [`Cmd::Help`] above.
         _ => Err(
             "a folder is required (`xerj autoindex <folder>`), or use \
-             `xerj autoindex map` / `xerj autoindex status`. \
+             `xerj autoindex map`, `xerj autoindex status`, or \
+             `xerj autoindex remove --prefix <P>`. \
              `xerj autoindex --help` prints the full usage"
                 .into(),
         ),
     }
+}
+
+struct RemoveReject {
+    dry_run: bool,
+    replace_prefix: bool,
+    state_dir: bool,
+    fresh: bool,
+    workers: bool,
+    pdf_workers: bool,
+    pdf_timeout: bool,
+    bulk_mb: bool,
+    bulk_timeout: bool,
+    snapshot: bool,
+    follow_symlinks: bool,
+    follow_symlinks_outside_root: bool,
+    stubs: bool,
+    ignore: bool,
+    max_file: bool,
+    sample: bool,
+    no_semantic: bool,
+    code_analyzer: bool,
+    brain: bool,
+    no_graph: bool,
+    watch: bool,
+    debounce: bool,
+    watch_flags: bool,
+    label: bool,
+    dataset: bool,
+    paging: bool,
+    progress: bool,
+    endpoint: bool,
+    max_minutes: bool,
+    max_index: bool,
+    plan: bool,
+    walk_only: bool,
+}
+
+struct RemoveParse {
+    cfg: RemoveCfg,
+    prefix_explicit: bool,
+    approve_set: bool,
+    markdown: bool,
+    reject: RemoveReject,
+}
+
+fn remove_cmd(input: RemoveParse) -> Result<Cmd, String> {
+    let RemoveParse {
+        cfg,
+        prefix_explicit,
+        approve_set,
+        markdown,
+        reject,
+    } = input;
+    if !prefix_explicit {
+        return Err(
+            "autoindex remove requires --prefix. The default name ax is shared across folders, \
+             so this command will not guess it. Pass the prefix you indexed with."
+                .into(),
+        );
+    }
+    if approve_set && !cfg.yes {
+        return Err(
+            "--approve is the indexing decision gate. `autoindex remove` confirms with --yes, \
+             after it has printed what it will delete."
+                .into(),
+        );
+    }
+    if reject.state_dir {
+        return Err(
+            "--state-dir is the local resume journal. `autoindex remove` does not read or delete \
+             it. The journal key includes the folder, so a later index of that folder still \
+             resumes from it. Drop --state-dir."
+                .into(),
+        );
+    }
+    let flags = [
+        ("--dry-run", reject.dry_run),
+        ("--replace-prefix", reject.replace_prefix),
+        ("--fresh", reject.fresh),
+        ("--workers", reject.workers),
+        ("--pdf-workers", reject.pdf_workers),
+        ("--pdf-timeout-secs", reject.pdf_timeout),
+        ("--bulk-mb", reject.bulk_mb),
+        ("--bulk-timeout-secs", reject.bulk_timeout),
+        ("--snapshot-max-gb", reject.snapshot),
+        ("--follow-symlinks", reject.follow_symlinks),
+        (
+            "--follow-symlinks-outside-root",
+            reject.follow_symlinks_outside_root,
+        ),
+        ("--stub", reject.stubs),
+        ("--no-ignore", reject.ignore),
+        ("--max-file-bytes", reject.max_file),
+        ("--sample", reject.sample),
+        ("--no-semantic", reject.no_semantic),
+        ("--code-analyzer", reject.code_analyzer),
+        ("--brain", reject.brain),
+        ("--no-graph", reject.no_graph),
+        ("--watch", reject.watch),
+        ("--debounce", reject.debounce),
+        ("--poll-interval", reject.watch_flags),
+        ("--label", reject.label),
+        ("--dataset", reject.dataset),
+        ("--offset", reject.paging),
+        ("--progress", reject.progress),
+        ("--endpoint-url", reject.endpoint),
+        ("--max-minutes", reject.max_minutes),
+        ("--max-index-size", reject.max_index),
+        ("--plan", reject.plan),
+        ("--walk-only", reject.walk_only),
+        ("--md", markdown),
+    ];
+    let bad: Vec<&str> = flags
+        .iter()
+        .filter(|(_, used)| *used)
+        .map(|(n, _)| *n)
+        .collect();
+    if !bad.is_empty() {
+        return Err(format!(
+            "{} apply only to indexing, not `autoindex remove`. This command lists one folder's \
+             indices and catalog rows and deletes those. It does not walk or index. Drop them",
+            bad.join(", ")
+        ));
+    }
+    Ok(Cmd::Remove(cfg))
 }
 
 #[cfg(test)]
@@ -2641,6 +2966,37 @@ mod tests {
     }
 
     #[test]
+    fn remove_requires_a_prefix_and_confirms_with_yes() {
+        let missing = err(&["remove"]);
+        assert!(missing.contains("requires --prefix"), "{missing}");
+        let cfg = match parse(
+            ["remove", "--prefix", "proj", "--root", "/tmp/proj", "--yes"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        )
+        .unwrap()
+        {
+            Cmd::Remove(cfg) => cfg,
+            other => panic!("expected remove, got {other:?}"),
+        };
+        assert_eq!(cfg.prefix, "proj");
+        assert_eq!(cfg.root.as_deref(), Some("/tmp/proj"));
+        assert!(cfg.yes);
+        let refused = err(&["remove", "--prefix", "proj", "--dry-run"]);
+        assert!(refused.contains("--dry-run"), "{refused}");
+        assert!(refused.contains("not `autoindex remove`"), "{refused}");
+        let walk = err(&["remove", "--prefix", "proj", "--walk-only"]);
+        assert!(walk.contains("--walk-only"), "{walk}");
+        assert!(walk.contains("not `autoindex remove`"), "{walk}");
+        let journal = err(&["remove", "--prefix", "proj", "--state-dir", "/tmp/j"]);
+        assert!(journal.contains("resume journal"), "{journal}");
+        assert!(err(&["data", "--root", "/tmp/a"]).contains("only supported with"));
+        assert!(err(&["remove", "--prefix", "proj", "--approve", "proceed"]).contains("--yes"));
+        assert!(super::help_text().contains("autoindex remove"));
+    }
+
+    #[test]
     fn yes_is_an_alias_for_approve_proceed() {
         for flag in ["--yes", "-y"] {
             assert_eq!(index(&["data", flag]).approve, Some(Approval::Proceed));
@@ -2669,6 +3025,58 @@ mod tests {
         assert!(err(&["data", "--approve"]).contains("--approve"));
     }
 
+    /// `--walk-only` is the folder map that stops before hashing. `--dry-run`
+    /// stays the plan preview: it still hashes. The two together are the
+    /// walk-only run, because that is the stricter "index nothing".
+    #[test]
+    fn walk_only_is_accepted_and_dry_run_still_hashes() {
+        let help = super::help_text();
+        assert!(
+            help.contains("--walk-only"),
+            "the flag must be in `xerj autoindex --help`"
+        );
+        assert!(
+            help.contains("Stops before hashing") && help.contains("no digest, no sniff"),
+            "help must say the walk does not hash or sniff file contents: {help}"
+        );
+        assert!(
+            help.contains("Ignore files are"),
+            "help must not claim ignore files are unread; the walk has always read them"
+        );
+        assert!(
+            help.contains("--dry-run itself still"),
+            "help must keep --dry-run's hash-and-plan behaviour distinct"
+        );
+
+        let plain = index(&["data"]);
+        assert!(!plain.dry_run && !plain.walk_only);
+        assert!(!plain.ignore.deep_count);
+
+        let dry = index(&["data", "--dry-run"]);
+        assert!(dry.dry_run);
+        assert!(!dry.walk_only, "--dry-run must not become walk-only");
+        assert!(dry.ignore.deep_count);
+
+        let walk = index(&["data", "--walk-only"]);
+        assert!(walk.walk_only);
+        assert!(
+            walk.dry_run,
+            "walk-only indexes nothing, so the dry-run guards have to be armed"
+        );
+        assert!(walk.ignore.deep_count);
+
+        let both = index(&["data", "--dry-run", "--walk-only"]);
+        assert!(both.dry_run && both.walk_only);
+
+        assert!(err(&["data", "--watch", "--no-graph", "--walk-only"]).contains("--watch"));
+        assert!(err(&["s3://b/", "--watch", "--walk-only"]).contains("--watch"));
+        assert!(err(&["map", "--walk-only"]).contains("autoindex map"));
+        assert!(err(&["status", "--walk-only"]).contains("autoindex status"));
+        assert!(err(&["data", "--walk-only", "--max-minutes", "1"]).contains("--max-minutes"));
+        assert!(err(&["data", "--walk-only", "--yes"]).contains("--approve"));
+        assert!(err(&["data", "--walk-only", "--label", "q.json"]).contains("--label"));
+    }
+
     #[test]
     fn cancel_and_dry_run_are_refused_rather_than_silently_merged() {
         let err = err(&["data", "--approve", "cancel", "--dry-run"]);
@@ -2686,6 +3094,7 @@ mod tests {
             vec!["map", "--max-minutes", "5"],
             vec!["status", "--approve", "proceed"],
             vec!["--yes", "map"],
+            vec!["map", "--drop-indexed"],
         ] {
             let err = parse(args.into_iter().map(str::to_string).collect()).unwrap_err();
             assert!(err.contains("apply only to indexing"), "{err}");
@@ -2726,6 +3135,7 @@ mod tests {
             "--yes, -y",
             "--max-index-size",
             "--plan <NAME>",
+            "--drop-indexed",
             "DISK BUDGET:",
             "0 disables the gate",
             "ESTIMATE + DECISION GATE:",
@@ -2754,6 +3164,13 @@ mod tests {
         let cfg = index(&["data", "--plan", "code-and-docs", "--max-index-size", "2MB"]);
         assert_eq!(cfg.budget_plan.as_deref(), Some("code-and-docs"));
         assert_eq!(cfg.max_index_bytes, Some(2 * 1024 * 1024));
+        assert!(
+            !cfg.drop_indexed,
+            "--plan does not agree to delete an existing index"
+        );
+        let confirmed = index(&["data", "--plan", "code-and-docs", "--drop-indexed"]);
+        assert!(confirmed.drop_indexed);
+        assert!(!index(&["data", "--yes"]).drop_indexed);
         let plan_err = err(&["data", "--plan", "everything"]);
         assert!(plan_err.contains("not a plan"), "{plan_err}");
     }
