@@ -123,6 +123,10 @@ pub struct IndexCfg {
     /// and refused when it does not. A named plan runs even when the estimate
     /// says it does not fit (with a warning): that is the override.
     pub budget_plan: Option<String>,
+    /// `--drop-indexed`. Confirms that a reduced plan may delete files it
+    /// leaves out when those files are already indexed. Without it that
+    /// re-run exits 4 and lists them. `--plan` and `--yes` do not set this.
+    pub drop_indexed: bool,
     pub json: bool,
     pub quiet: bool,
     /// Progress surface. Orthogonal to `json`: `--json` shapes *stdout* (the
@@ -420,9 +424,11 @@ pub fn help_text_with(feedback: bool) -> String {
          \x20\x20\x20\x20--yes, -y            alias for --approve proceed. When the default index\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20plan does not fit the disk budget, --yes takes the\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20recommended plan that does fit. It does not index a\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20plan that is over budget. On `autoindex remove` it is\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20the confirmation: without it a non-terminal run prints\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20the plan and exits 4. It does not choose a folder.\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20plan that is over budget. It does not delete indexed\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20files a smaller plan leaves out; that is --drop-indexed.\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20On `autoindex remove` it is the confirmation: without\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20it a non-terminal run prints the plan and exits 4.\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20It does not choose a folder.\n\
          \x20\x20\x20\x20--root <DIR>         (`autoindex remove`) the one folder to drop when\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20--prefix holds more than one. Refused on any other\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20command\n\
@@ -435,6 +441,9 @@ pub fn help_text_with(feedback: bool) -> String {
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20code-and-docs-no-vectors. A named plan runs even\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20when the estimate says it does not fit (warned).\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20See DISK BUDGET.\n\
+         \x20\x20\x20\x20--drop-indexed       delete already-indexed files a reduced plan leaves\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20out. Without this flag that re-run exits 4 and lists\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20them. --plan and --yes do not agree to the deletion.\n\
          \x20\x20\x20\x20--dry-run            walk+sniff+infer, print the plan, index nothing\n\
          \x20\x20\x20\x20--walk-only          stop after the walk. Prints each top-level folder's\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20file count and size, what the ignore rules would drop\n\
@@ -732,6 +741,11 @@ pub fn help_text_with(feedback: bool) -> String {
          \x20\x20\x20\x20list and the run exits 4 unless --yes takes the recommended plan that\n\
          \x20\x20\x20\x20fits, or --plan names one (a named plan is the override: it runs\n\
          \x20\x20\x20\x20over the estimate with a warning; the estimate errs high).\n\
+         \x20\x20\x20\x20A reduced plan on a folder that is already indexed does not delete\n\
+         \x20\x20\x20\x20the files it leaves out. That re-run exits 4 and lists the files\n\
+         \x20\x20\x20\x20and the datasets a reconcile would remove, until --drop-indexed\n\
+         \x20\x20\x20\x20confirms it. --yes chooses a plan; it does not agree to delete\n\
+         \x20\x20\x20\x20indexed data.\n\
          \x20\x20\x20\x20A terminal with the question visible is asked. Kinds without a\n\
          \x20\x20\x20\x20calibration are reported as unmeasured and do not refuse the run.\n\
          \x20\x20\x20\x20Skipped files are listed after the ok: line (up to 20, then a count).\n\
@@ -757,10 +771,13 @@ pub fn help_text_with(feedback: bool) -> String {
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20rebuild the plan in place and include them. Read `reason`\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20to tell this apart from completed-with-junk;\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x204 NEEDS A DECISION — the estimate exceeded --max-minutes, the\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20estimated index does not fit the disk budget, or a --watch\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20poll cost more than --max-monthly-ops; nothing was indexed\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20and a JSON decision request is on stdout. A plan that does\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20not fit is not started, including with --yes;\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20estimated index does not fit the disk budget, a reduced\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20plan would delete files that are already indexed, or a\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20--watch poll cost more than --max-monthly-ops; nothing was\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20indexed and a JSON decision request is on stdout. A plan\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20that does not fit is not started, including with --yes.\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20Already-indexed files are not deleted unless --drop-indexed\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20is also set;\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x202 usage; 1 endpoint/journal failure, a refused corpus removal, or a\n\
          \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20refused unsafe state transition\n",
         feedback_block = xerj_common::feedback::block(feedback),
@@ -915,6 +932,7 @@ pub fn parse(args: Vec<String>) -> Result<Cmd, String> {
     let mut max_index_bytes: Option<u64> = None;
     let mut max_index_explicit = false;
     let mut budget_plan: Option<String> = None;
+    let mut drop_indexed = false;
     let mut json = false;
     let mut quiet = false;
     let mut progress: Option<ProgressMode> = None;
@@ -1157,6 +1175,12 @@ pub fn parse(args: Vec<String>) -> Result<Cmd, String> {
                     return Err("--plan was given twice".into());
                 }
                 budget_plan = Some(raw);
+            }
+            "--drop-indexed" => {
+                if drop_indexed {
+                    return Err("--drop-indexed was given twice".into());
+                }
+                drop_indexed = true;
             }
             "--yes" | "-y" => {
                 if let Some(previous) = approve {
@@ -1690,10 +1714,16 @@ pub fn parse(args: Vec<String>) -> Result<Cmd, String> {
                     .into(),
             );
         }
-        if max_minutes_explicit || approve_explicit || max_index_explicit || budget_plan.is_some() {
+        if max_minutes_explicit
+            || approve_explicit
+            || max_index_explicit
+            || budget_plan.is_some()
+            || drop_indexed
+        {
             return Err(
-                "--max-minutes/--approve/--yes/--max-index-size/--plan are the folder-indexing \
-                 gate; a watch has its own cost gate (--max-monthly-ops, --allow-cost)"
+                "--max-minutes/--approve/--yes/--max-index-size/--plan/--drop-indexed are the \
+                 folder-indexing gate; a watch has its own cost gate (--max-monthly-ops, \
+                 --allow-cost)"
                     .into(),
             );
         }
@@ -1832,11 +1862,12 @@ pub fn parse(args: Vec<String>) -> Result<Cmd, String> {
             if max_minutes_explicit
                 || approve_explicit
                 || max_index_explicit
-                || budget_plan.is_some() =>
+                || budget_plan.is_some()
+                || drop_indexed =>
         {
             Err(format!(
-                "--max-minutes/--approve/--yes/--max-index-size/--plan apply only to indexing, \
-                 not `autoindex {}`",
+                "--max-minutes/--approve/--yes/--max-index-size/--plan/--drop-indexed apply only \
+                 to indexing, not `autoindex {}`",
                 sub.as_deref().unwrap_or_default()
             ))
         }
@@ -1983,6 +2014,7 @@ pub fn parse(args: Vec<String>) -> Result<Cmd, String> {
                 approve,
                 max_index_bytes,
                 budget_plan,
+                drop_indexed,
                 json,
                 quiet,
                 progress,
@@ -3062,6 +3094,7 @@ mod tests {
             vec!["map", "--max-minutes", "5"],
             vec!["status", "--approve", "proceed"],
             vec!["--yes", "map"],
+            vec!["map", "--drop-indexed"],
         ] {
             let err = parse(args.into_iter().map(str::to_string).collect()).unwrap_err();
             assert!(err.contains("apply only to indexing"), "{err}");
@@ -3102,6 +3135,7 @@ mod tests {
             "--yes, -y",
             "--max-index-size",
             "--plan <NAME>",
+            "--drop-indexed",
             "DISK BUDGET:",
             "0 disables the gate",
             "ESTIMATE + DECISION GATE:",
@@ -3130,6 +3164,13 @@ mod tests {
         let cfg = index(&["data", "--plan", "code-and-docs", "--max-index-size", "2MB"]);
         assert_eq!(cfg.budget_plan.as_deref(), Some("code-and-docs"));
         assert_eq!(cfg.max_index_bytes, Some(2 * 1024 * 1024));
+        assert!(
+            !cfg.drop_indexed,
+            "--plan does not agree to delete an existing index"
+        );
+        let confirmed = index(&["data", "--plan", "code-and-docs", "--drop-indexed"]);
+        assert!(confirmed.drop_indexed);
+        assert!(!index(&["data", "--yes"]).drop_indexed);
         let plan_err = err(&["data", "--plan", "everything"]);
         assert!(plan_err.contains("not a plan"), "{plan_err}");
     }
