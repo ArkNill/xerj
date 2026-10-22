@@ -83,8 +83,9 @@ ronitgupta138 and Jitin2102.
   and when the live mapping can be read its `field_count` is the catalog
   fields union the top-level mapping fields — the same set the plan counts,
   labeled on both sides. Cardinality of a locator the profiler never sampled
-  stays unmeasured
-  ([#2120](https://github.com/xerj-org/xerj/issues/2120)).
+  stays unmeasured. Two slash-joined words such as `tcp/ip` stay prose
+  ([#2120](https://github.com/xerj-org/xerj/issues/2120), PR
+  [#2124](https://github.com/xerj-org/xerj/pull/2124)).
 
 - A bare hub question that names a language or a technology
   (`xerj "how do I use async let in Swift"`, `xerj "Swift Result type map"`)
@@ -230,11 +231,6 @@ ronitgupta138 and Jitin2102.
   plain-word `xerj search` and `xerj_search` apply `xerj def`'s penalty to test,
   example, fuzz and bench paths. Prose corpora, DSL queries and explicit sorts
   keep the engine's order (PR [#2125](https://github.com/xerj-org/xerj/pull/2125)).
-- Ask and map: `POST /_ask` (`xerj_plan`) keeps a directory in the prompt as a
-  path-prefix filter instead of dropping it as decoration, and `xerj autoindex
-  map` lists the `ax_*` locator fields (PR
-  [#2124](https://github.com/xerj-org/xerj/pull/2124)). Two slash-joined words
-  such as `tcp/ip` stay prose.
 - Autoindex: a heartbeat while an extract slot is full (PR
   [#1657](https://github.com/xerj-org/xerj/pull/1657)). An open section overlaps
   on a word (PR [#1700](https://github.com/xerj-org/xerj/pull/1700)). The help
