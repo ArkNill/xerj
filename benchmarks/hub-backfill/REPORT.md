@@ -6,7 +6,7 @@ are in `rows.jsonl`. Spec: docs/CORPUS_HUB_V2_IMPLEMENTATION.md §12.1.
 
 ## Current state
 
-473 corpora attempted: 425 published at their latest attempt, 48 not.
+497 corpora attempted: 449 published at their latest attempt, 48 not.
 
 ### Latest attempt did not publish (fix or delist on purpose)
 
@@ -52,18 +52,63 @@ are in `rows.jsonl`. Spec: docs/CORPUS_HUB_V2_IMPLEMENTATION.md §12.1.
 | `exploit-pocs-2026` | `160f470e` |  |  | failed at `build` | xerj hub build-pack: `corpus add` failed (exit 1) |
 | `exploitdb-src` | `12879ca7` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
 | `fluent-bit` | `3b6ce5cf` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `freebsd-handbook` | `3aa6b19a` |  |  | failed at `build` | xerj hub build-pack: bulk /xc-freebsd-handbook-b1792591697-defs/_bulk -> HTTP 429: {"took":4,"errors":true,"items":[{"index":{"_index":"xc-freebsd-handbook-b1792591697-defs","_id":"","_version":1,"_shards":{"total":1,"successful":1,"failed" |
+| `freebsd-handbook` | `3aa6b19a` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
 | `ghsa-db` | `4b4ac300` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
 | `github-api-description` | `7bdf5f00` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `ipsum-blocklist` | `444b4802` | 26518051 | 0 | failed at `e2e` | no question from ask_for (reputation |
 | `mtl-bioinformatics-ner` | `df0df02f` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
 | `nuclei-templates` | `24a43e14` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `retext-passive` | `66ca2c56` | 111438 | 2 | failed at `e2e` | no question from ask_for (constructions |
-| `retext-profanities` | `2627fb08` | 130993 | 4 | failed at `e2e` | no question from ask_for (rephrasings |
+| `xerj-blogposts` | `a9ad4fc0` |  |  | failed at `build` | xerj hub build-pack: `corpus add` failed (exit 2) |
+| `xerj-columnar` | `31081d9f` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
+| `xerj-search` | `3a55bc98` |  |  | cancelled at `build` | autoindex: search failed: search: error sending request for url (http://127.0.0.1:19200/xc-xerj-search-b1792632964-lucene-lucene-2/_search); retrying (attempt 1 of 6, 300 s in this request so far) |
 
 ## Runs (newest first)
 
-The 30 newest of 31 runs; every row is in `rows.jsonl`.
+The 30 newest of 32 runs; every row is in `rows.jsonl`.
+
+### Run [39623848815](https://github.com/xerj-org/xerj/actions/runs/39623848815), 2026-10-21: 24 of 40 published
+
+| slug | pin8 | bytes | defs | result | error |
+|---|---|---:|---:|---|---|
+| `concourse` | `6a706fb8` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
+| `counsel-chat` | `e202e19c` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
+| `exploit-pocs-2023` | `af9e194d` |  |  | failed at `build` | xerj hub build-pack: `corpus add` failed (exit 1) |
+| `exploit-pocs-2024` | `7855e58f` |  |  | failed at `build` | xerj hub build-pack: `corpus add` failed (exit 1) |
+| `exploit-pocs-2025` | `374cf8f1` |  |  | failed at `build` | xerj hub build-pack: `corpus add` failed (exit 1) |
+| `exploit-pocs-2026` | `160f470e` |  |  | failed at `build` | xerj hub build-pack: `corpus add` failed (exit 1) |
+| `exploitdb-src` | `12879ca7` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
+| `fluent-bit` | `3b6ce5cf` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
+| `freebsd-handbook` | `3aa6b19a` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
+| `ghsa-db` | `4b4ac300` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
+| `github-api-description` | `7bdf5f00` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
+| `mtl-bioinformatics-ner` | `df0df02f` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
+| `nuclei-templates` | `24a43e14` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
+| `xerj-blogposts` | `a9ad4fc0` |  |  | failed at `build` | xerj hub build-pack: `corpus add` failed (exit 2) |
+| `xerj-columnar` | `31081d9f` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
+| `xerj-search` | `3a55bc98` |  |  | cancelled at `build` | autoindex: search failed: search: error sending request for url (http://127.0.0.1:19200/xc-xerj-search-b1792632964-lucene-lucene-2/_search); retrying (attempt 1 of 6, 300 s in this request so far) |
+| `ipsum-blocklist` | `444b4802` | 26378221 | 0 | published `pack-ipsum-blocklist-444b4802-r10` |  |
+| `retext-passive` | `66ca2c56` | 111704 | 2 | published `pack-retext-passive-66ca2c56-r4` |  |
+| `retext-profanities` | `2627fb08` | 130655 | 4 | published `pack-retext-profanities-2627fb08-r4` |  |
+| `uslm-us-legislation` | `4ec9db2f` | 56241879 | 0 | published `pack-uslm-us-legislation-4ec9db2f` |  |
+| `valkey-docs` | `4852e820` | 11592071 | 51 | published `pack-valkey-docs-4852e820` |  |
+| `valkey-src` | `f4cbd1c5` | 75901715 | 27272 | published `pack-valkey-src-f4cbd1c5` |  |
+| `vectra-core` | `af64231d` | 516921 | 207 | published `pack-vectra-core-af64231d` |  |
+| `vite` | `dce9fe69` | 7541133 | 3992 | published `pack-vite-dce9fe69` |  |
+| `vue` | `ff350142` | 18014288 | 5378 | published `pack-vue-ff350142` |  |
+| `vuln-fix-commits` | `3f7ce8ce` | 3948835 | 1074 | published `pack-vuln-fix-commits-3f7ce8ce` |  |
+| `w3c-css` | `d06dc03e` | 100341798 | 1677 | published `pack-w3c-css-d06dc03e` |  |
+| `weaviate` | `a920eab8` | 155918974 | 73057 | published `pack-weaviate-a920eab8` |  |
+| `web-features` | `de89ce66` | 11634883 | 215 | published `pack-web-features-de89ce66` |  |
+| `webgl` | `714857a2` | 54370970 | 9236 | published `pack-webgl-714857a2` |  |
+| `whatwg-dom` | `3071e5f2` | 197469 | 0 | published `pack-whatwg-dom-3071e5f2` |  |
+| `whatwg-fetch` | `e9460d1b` | 153072 | 0 | published `pack-whatwg-fetch-e9460d1b` |  |
+| `whatwg-html` | `86190a4d` | 1009130 | 47 | published `pack-whatwg-html-86190a4d` |  |
+| `whatwg-specs` | `4d844936` | 31336581 | 25 | published `pack-whatwg-specs-4d844936` |  |
+| `whatwg-streams` | `b9ba9f49` | 8795033 | 559 | published `pack-whatwg-streams-b9ba9f49` |  |
+| `whatwg-url` | `fde3f74f` | 148326 | 0 | published `pack-whatwg-url-fde3f74f` |  |
+| `whatwg-webidl` | `0620cf17` | 226514 | 3 | published `pack-whatwg-webidl-0620cf17` |  |
+| `woke-inclusive-lint` | `5d52c154` | 1200106 | 333 | published `pack-woke-inclusive-lint-5d52c154` |  |
+| `write-good` | `6940b034` | 797105 | 11 | published `pack-write-good-6940b034` |  |
+| `xerj-storage` | `e449d171` | 26441078 | 4408 | published `pack-xerj-storage-e449d171` |  |
 
 ### Run [39605736840](https://github.com/xerj-org/xerj/actions/runs/39605736840), 2026-10-21: 24 of 40 published
 
@@ -1369,48 +1414,3 @@ The 30 newest of 31 runs; every row is in `rows.jsonl`.
 | `caddy` | `ac834b5d` | 14497818 | 4633 | published `pack-caddy-ac834b5d` |  |
 | `caldera` | `cb8d6a81` | 11038475 | 2989 | published `pack-caldera-cb8d6a81` |  |
 | `caldera-stockpile` | `996ec41c` | 2479556 | 743 | published `pack-caldera-stockpile-996ec41c` |  |
-
-### Run [39088277520](https://github.com/xerj-org/xerj/actions/runs/39088277520), 2026-10-18: 0 of 40 published
-
-| slug | pin8 | bytes | defs | result | error |
-|---|---|---:|---:|---|---|
-| `12-factor-agents` | `d20c7283` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `18f-content-guide` | `1b1723d3` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `a11y-project-content` | `27de2268` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `accord-legal-models` | `a23b30a1` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `ada-2010` | `d2be9eb3` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `adalflow` | `810de99d` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `adyen-openapi` | `45520ee6` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `aeron` | `d3499bb1` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `agentbench` | `d1e4a10d` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `agentscope` | `812eaecd` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `agno` | `1f2aac51` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `aider` | `5dc9490b` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `aioquic` | `974e9349` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `alex-inclusive-language` | `9a57595d` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `ann-benchmarks` | `2e081ad3` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `annoy` | `379f7446` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `anthropic-cookbook` | `9c1e493d` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `anything-llm` | `3e4f9411` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `api-blueprint` | `86fc3a12` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `api-common-protos` | `3332dec5` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `api-linter` | `836098d5` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `arazzo-spec` | `79ddb24a` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `argo-cd` | `03a10c74` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `argo-workflows` | `8f57ec73` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `aria-practices` | `0f765e4d` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `arrow-rs` | `73595d58` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `astro-docs` | `f29faa41` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `asyncapi-bindings` | `1f418fe7` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `asyncapi-spec` | `1dd65fd2` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `asyncapi-spec-json-schemas` | `00af2905` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `asyncapi-studio` | `f3aa74ec` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `atomic-agents` | `4d443474` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `attack-flow` | `8b6ca28b` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `autogen` | `027ecf0a` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `awesome-ai-system-prompts` | `74964625` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `awesome-llm-apps` | `4bf51ab7` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `awesome-mcp-servers` | `cc7f1f42` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `awesome-sre` | `e91ef69a` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `axe-core` | `7e287a6a` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
-| `axolotl` | `e767fe07` |  |  | no result | the pack job recorded no result (pack jobs: failure, build xerj: success) |
