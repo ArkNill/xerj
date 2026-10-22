@@ -2441,41 +2441,85 @@ fn note_alloc_failure(size: usize, align: usize) {
     report_fatal(&buf[..n]);
 }
 
-/// Async-signal-safe. Writes a line, restores the default disposition,
-/// and re-raises so the process still dies with the original signal.
-/// SIGKILL cannot be caught. SIGTERM is left to the server's shutdown path.
+/// The disposition each fatal signal had before [`install_fatal_reporter`]
+/// replaced it. Written once at startup, before the handler can run, and
+/// only read inside the handler.
+#[cfg(unix)]
+static mut PREVIOUS_FATAL_ACTIONS: [Option<libc::sigaction>; 4] = [None; 4];
+
+#[cfg(unix)]
+const FATAL_SIGNALS: [libc::c_int; 4] = [libc::SIGABRT, libc::SIGSEGV, libc::SIGBUS, libc::SIGILL];
+
+/// Async-signal-safe. Writes a line, puts back the disposition the signal
+/// had before (the Rust runtime's guard-page handler for SIGSEGV/SIGBUS,
+/// which prints "has overflowed its stack"; the default elsewhere), and
+/// returns. A fault re-executes and reaches that handler with its real
+/// `siginfo`; `abort()` re-raises SIGABRT after a handler returns; so the
+/// process still dies with the original signal. SIGKILL cannot be caught.
+/// SIGTERM is left to the server's shutdown path.
 #[cfg(unix)]
 extern "C" fn fatal_signal(sig: libc::c_int) {
     let mut buf = [0u8; 128];
     let n = format_fatal_signal(&mut buf, sig);
     report_fatal(&buf[..n]);
     unsafe {
-        libc::signal(sig, libc::SIG_DFL);
-        libc::raise(sig);
+        let previous = std::ptr::addr_of!(PREVIOUS_FATAL_ACTIONS).read();
+        let slot = FATAL_SIGNALS.iter().position(|s| *s == sig);
+        match slot.and_then(|i| previous[i]) {
+            Some(action) => {
+                libc::sigaction(sig, &action, std::ptr::null_mut());
+            }
+            None => {
+                libc::signal(sig, libc::SIG_DFL);
+            }
+        }
+        if sig != libc::SIGSEGV && sig != libc::SIGBUS && sig != libc::SIGILL {
+            // A raised signal (not a fault) does not re-execute.
+            libc::raise(sig);
+        }
     }
 }
 
 fn install_fatal_reporter() {
-    std::panic::set_hook(Box::new(|info| {
-        // A panic may still allocate. The allocation hook covers the
-        // case where the heap itself is what failed.
-        eprintln!("FATAL: xerj panicked: {info}");
+    // Chain to the hook that was installed before: it prints the thread
+    // name, the location and (with RUST_BACKTRACE) the backtrace. A panic
+    // can be caught and the node keep serving, so the crash.log line says
+    // "panicked", not FATAL; a panic that ends the process is followed by
+    // the abort or exit that does.
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
         #[cfg(unix)]
         {
-            let line = format!("FATAL: xerj panicked: {info}\n");
             let fd = CRASH_LOG_FD.load(std::sync::atomic::Ordering::Relaxed);
             if fd >= 0 {
+                let thread = std::thread::current();
+                let line = format!(
+                    "xerj panicked on thread {}: {info}\n",
+                    thread.name().unwrap_or("<unnamed>")
+                );
                 write_fd(fd, line.as_bytes());
             }
         }
+        previous(info);
     }));
     #[cfg(unix)]
     unsafe {
         let mut action: libc::sigaction = std::mem::zeroed();
         action.sa_sigaction = fatal_signal as *const () as libc::sighandler_t;
         libc::sigemptyset(&mut action.sa_mask);
-        action.sa_flags = 0;
-        for sig in [libc::SIGABRT, libc::SIGSEGV, libc::SIGBUS, libc::SIGILL] {
+        // SA_ONSTACK: a stack overflow faults with no stack left, so the
+        // handler must run on the alternate stack the Rust runtime sets up
+        // per thread.
+        action.sa_flags = libc::SA_ONSTACK;
+        let mut previous: [Option<libc::sigaction>; 4] = [None; 4];
+        for (i, sig) in FATAL_SIGNALS.iter().enumerate() {
+            let mut old: libc::sigaction = std::mem::zeroed();
+            if libc::sigaction(*sig, std::ptr::null(), &mut old) == 0 {
+                previous[i] = Some(old);
+            }
+        }
+        std::ptr::addr_of_mut!(PREVIOUS_FATAL_ACTIONS).write(previous);
+        for sig in FATAL_SIGNALS {
             libc::sigaction(sig, &action, std::ptr::null_mut());
         }
     }
