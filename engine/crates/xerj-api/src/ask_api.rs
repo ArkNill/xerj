@@ -2338,6 +2338,20 @@ fn path_prefix(raw: &str) -> Option<String> {
         return None;
     }
     let last = segments[segments.len() - 1];
+    // Two bare words joined by a slash (`tcp/ip`, `client/server`,
+    // `north/south`) are prose, not a path. Only take a token as a path when
+    // it says so: three or more segments, a file extension on the last
+    // segment, or a leading `./` `/` `~/` or trailing slash.
+    let has_ext = last.rsplit_once('.').is_some_and(|(stem, ext)| {
+        !stem.is_empty() && !ext.is_empty() && ext.chars().all(|c| c.is_ascii_alphanumeric())
+    });
+    let anchored = normalized.starts_with("./")
+        || normalized.starts_with('/')
+        || normalized.starts_with("~/")
+        || normalized.ends_with('/');
+    if segments.len() < 3 && !has_ext && !anchored {
+        return None;
+    }
     if last.contains('.') {
         Some(trimmed.to_string())
     } else {
@@ -2646,6 +2660,11 @@ mod tests {
         assert_eq!(path_prefix("2026/09/01"), None);
         assert_eq!(path_prefix("https://example.com/a"), None);
         assert_eq!(path_prefix("rust"), None);
+        // Two bare words joined by a slash are prose, not a path.
+        assert_eq!(path_prefix("tcp/ip"), None);
+        assert_eq!(path_prefix("client/server"), None);
+        assert_eq!(path_prefix("src/lib.rs"), Some("src/lib.rs".into()));
+        assert_eq!(path_prefix("app/src/"), Some("app/src/".into()));
     }
 
     #[test]
