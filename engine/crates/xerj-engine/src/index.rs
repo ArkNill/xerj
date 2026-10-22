@@ -600,6 +600,24 @@ mod collection_publication_fail_closed_tests {
         assert!(matches!(cols.get("ax_file"), Some(Column::Keyword(_))));
     }
 
+    /// A dotted mapping name is an object sub-field. The builder only walks
+    /// top-level `_source` keys, so it cannot see `user.bio` inside
+    /// `{"user": {"bio": ..}}`. It must ship no presence column for it (the
+    /// reader then scans source) rather than an empty one that says no row
+    /// has the field.
+    #[test]
+    fn build_doc_value_columns_ships_no_presence_for_a_dotted_text_field() {
+        let mut skip = std::collections::HashSet::new();
+        skip.insert("user.bio".to_string());
+        let docs = [json!({"user": {"bio": "hello"}}), json!({"user": {}})];
+        let cols = super::build_doc_value_columns(docs.iter().map(Some), &skip);
+        assert!(
+            cols.get("user.bio").is_none(),
+            "a dotted field must not get a presence column: {:?}",
+            cols.get("user.bio")
+        );
+    }
+
     async fn assert_flush_freeze_keeps_readers_live_then_finishes(inject_error: bool) {
         let dir = tempfile::tempdir().unwrap();
         let mut config = Config::default();
@@ -27098,8 +27116,15 @@ fn build_doc_value_columns<'a>(
     // segment where the field is absent still has a column: `exists` then
     // answers "no row" without parsing source, and a missing column stays
     // reserved for segments written before this bitmap existed.
+    //
+    // Only top-level names. The loop below sees `_source`'s top-level keys,
+    // so a dotted mapping name (`user.bio`, an object sub-field) never gets a
+    // bit set; seeding it would ship an all-absent bitmap and `exists` would
+    // answer "no row" for documents that have the field. Those fields get
+    // no column and keep the source scan.
     let mut presence: BTreeMap<String, PresenceColumn> = skip
         .iter()
+        .filter(|name| !name.contains('.'))
         .map(|name| (name.clone(), PresenceColumn::empty()))
         .collect();
     // Fields that carry an ARRAY value in ANY doc of this segment.  The
