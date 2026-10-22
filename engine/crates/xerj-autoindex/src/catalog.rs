@@ -198,9 +198,60 @@ pub struct DatasetDocInput<'a> {
     pub run_id: &'a str,
 }
 
+/// Field list stored on a dataset doc.
+///
+/// The profiler never observes the `ax_*` provenance locators — they are
+/// stamped after sampling — but the mapping builder maps every
+/// `PROVENANCE_FIELDS` entry as `keyword` and every record carries them.
+/// Leaving them out of
+/// `fields_json` is what made `xerj_map` omit `ax_path` while `xerj_plan`
+/// counted it (#2120). Appending here does not touch `pd.specs`: that vec
+/// is hashed into `schema_identity`, and a new spec there would abort every
+/// existing state dir.
+pub fn catalog_field_specs(specs: &[crate::infer::FieldSpec]) -> Vec<crate::infer::FieldSpec> {
+    let mut out = specs.to_vec();
+    for name in crate::PROVENANCE_FIELDS {
+        if out.iter().any(|s| s.name == *name) {
+            continue;
+        }
+        out.push(provenance_catalog_spec(name));
+    }
+    out
+}
+
+/// A locator the pipeline stamps on every record. Coverage is 1 because the
+/// stamp is unconditional. Cardinality is unmeasured (`0` plus the note) —
+/// `ax_path` is high and `ax_dataset` is not, and inventing either number
+/// would be a false claim.
+fn provenance_catalog_spec(name: &str) -> crate::infer::FieldSpec {
+    crate::infer::FieldSpec {
+        name: name.to_string(),
+        es_type: "keyword".into(),
+        date_enc: None,
+        semantic: None,
+        cardinality_est: 0,
+        cardinality_overflow: false,
+        null_ratio: 0.0,
+        avg_len: 0.0,
+        coverage: 1.0,
+        examples: Vec::new(),
+        notes: vec![
+            "autoindex provenance locator, mapped keyword and stamped on every record; \
+             not sampled, so cardinality_est 0 means unmeasured"
+                .into(),
+        ],
+        date_min: None,
+        date_max: None,
+        date_evidence: Vec::new(),
+        num_min: None,
+        num_max: None,
+    }
+}
+
 pub fn dataset_doc(inp: &DatasetDocInput) -> (String, Value) {
     let id = format!("ds:{}:{}", inp.prefix, inp.pd.slug);
-    let fields_json = serde_json::to_string(&inp.pd.specs).unwrap_or_else(|_| "[]".into());
+    let fields_json =
+        serde_json::to_string(&catalog_field_specs(&inp.pd.specs)).unwrap_or_else(|_| "[]".into());
     let doc = json!({
         "doc_kind": "dataset",
         "slug": inp.pd.slug,
@@ -668,11 +719,12 @@ pub fn prefix_reuse_message(
              earlier datasets."
         )
     } else {
-        "Nothing was written. Pass --replace-prefix to retire those datasets on purpose, or use \
-         one --prefix per source folder. --dry-run does not bypass this check."
+        "Nothing was written. The command above is the first remedy: one --prefix per source \
+         folder. --replace-prefix retires those datasets on purpose; it is not the first option. \
+         --dry-run does not bypass this check."
             .to_string()
     };
-    format!(
+    let body = format!(
         "autoindex: --prefix {prefix} already indexes a different folder.\n\
          this run: {root}\n\
          already indexed from:\n\
@@ -684,7 +736,81 @@ pub fn prefix_reuse_message(
          {prefix}-docs (catalog id ds:{prefix}:docs). Index the parent folder that contains \
          the repositories, or pass a distinct --prefix per repository.\n\
          {ending}"
+    );
+    if replacing {
+        return body;
+    }
+    let suggested = suggested_prefix(root, prefix);
+    let command_root = root.replace(['\n', '\r'], " ");
+    let command = format!(
+        "xerj autoindex {} --prefix {}",
+        shell_quote(&command_root),
+        shell_quote(&suggested)
+    );
+    format!(
+        "autoindex: this folder needs its own --prefix. Do not delete the other folder's indices.\n\
+         Ready to copy:\n  {command}\n{body}"
     )
+}
+
+/// A prefix for `root` that is not `taken` and can name an index.
+fn suggested_prefix(root: &str, taken: &str) -> String {
+    let path = std::path::Path::new(root.trim());
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string();
+    let parent = path
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string();
+    let mut raw = Vec::new();
+    if !name.is_empty() {
+        raw.push(name.clone());
+        if !parent.is_empty() {
+            raw.push(format!("{parent}-{name}"));
+        }
+        raw.push(format!("{name}-2"));
+        raw.push(format!("p{name}"));
+    }
+    raw.push(format!("p{taken}"));
+    raw.push(format!("{taken}-2"));
+    for candidate in raw {
+        let sanitized = crate::dataset::sanitize_prefix(&candidate);
+        if prefix_is_usable(&sanitized, taken) {
+            return sanitized;
+        }
+    }
+    for n in 3..64 {
+        let sanitized = crate::dataset::sanitize_prefix(&format!("{taken}-{n}"));
+        if prefix_is_usable(&sanitized, taken) {
+            return sanitized;
+        }
+    }
+    "folder".to_string()
+}
+
+fn prefix_is_usable(prefix: &str, taken: &str) -> bool {
+    !prefix.is_empty() && prefix != taken && crate::dataset::index_prefix_error(prefix).is_none()
+}
+
+/// Quote a path for a shell command an agent can copy. Unquoted when every
+/// character is safe; otherwise single quotes, with `'` written as `'\''`.
+fn shell_quote(s: &str) -> String {
+    if s.is_empty() {
+        return "''".to_string();
+    }
+    let safe = s
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | ':' | '\\'));
+    if safe {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    }
 }
 
 /// How many dataset detail sections the default map prints before it asks
@@ -861,7 +987,11 @@ pub fn render_map_page(
         }
         // fields table
         if let Some(fj) = d.get("fields_json").and_then(|v| v.as_str()) {
-            if let Ok(specs) = serde_json::from_str::<Vec<crate::infer::FieldSpec>>(fj) {
+            if let Ok(parsed) = serde_json::from_str::<Vec<crate::infer::FieldSpec>>(fj) {
+                // Old catalogs were written before locators were appended.
+                // Rendering them here is what an already-indexed corpus's
+                // `xerj autoindex map` shows, without a reindex (#2120).
+                let specs = catalog_field_specs(&parsed);
                 s.push_str("| field | type | semantic | cardinality | null% | examples |\n");
                 s.push_str("|---|---|---|---|---|---|\n");
                 let mut sorted: Vec<&crate::infer::FieldSpec> = specs.iter().collect();
@@ -872,7 +1002,9 @@ pub fn render_map_page(
                         .then(a.name.cmp(&b.name))
                 });
                 for f in sorted.iter().take(40) {
-                    let card = if f.cardinality_overflow {
+                    let card = if f.notes.iter().any(|n| n.contains("not sampled")) {
+                        "—".to_string()
+                    } else if f.cardinality_overflow {
                         format!("{}+", crate::infer::DISTINCT_CAP)
                     } else {
                         f.cardinality_est.to_string()
@@ -1168,6 +1300,48 @@ mod duplicate_tests {
 
     /// A newline in an example used to end the markdown row. The next line
     /// (`## Branded types…`) was then a heading in the middle of the table.
+    #[test]
+    fn catalog_fields_include_provenance_locators_the_profiler_never_saw() {
+        let specs = catalog_field_specs(&[one_field("language", "rust")]);
+        let names: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
+        for loc in crate::PROVENANCE_FIELDS {
+            assert!(names.contains(loc), "missing {loc}: {names:?}");
+        }
+        let again = catalog_field_specs(&specs);
+        assert_eq!(
+            again.len(),
+            specs.len(),
+            "a locator already stored is not duplicated"
+        );
+        let ax_path = specs.iter().find(|s| s.name == "ax_path").unwrap();
+        assert_eq!(ax_path.es_type, "keyword");
+        assert_eq!(ax_path.coverage, 1.0);
+        assert!(ax_path.notes.iter().any(|n| n.contains("not sampled")));
+    }
+
+    #[test]
+    fn an_old_catalog_map_still_lists_ax_path() {
+        let dataset = json!({
+            "index_name": "ax-code",
+            "slug": "code",
+            "record_count": 10,
+            "file_count": 1,
+            "formats": "rs",
+            "fields_json": serde_json::to_string(&vec![one_field("language", "rust")]).unwrap()
+        });
+        let rendered = render_map(None, &[dataset], &[], &[], &[], 0);
+        assert!(rendered.contains("`ax_path`"), "{rendered}");
+        assert!(rendered.contains("`ax_locator`"), "{rendered}");
+        let row = rendered
+            .lines()
+            .find(|l| l.contains("`ax_path`"))
+            .expect("ax_path row");
+        assert!(
+            row.contains("| — | 0%"),
+            "unmeasured cardinality is not a fake 0: {row}"
+        );
+    }
+
     #[test]
     fn an_example_newline_stays_inside_its_table_row() {
         let dataset = json!({
@@ -1494,9 +1668,43 @@ mod prefix_reuse_tests {
         assert!(message.contains("ds:ref:docs"), "{message}");
         assert!(message.contains("Nothing was written"), "{message}");
         assert!(message.contains("--replace-prefix"), "{message}");
+        assert!(message.contains("Do not delete"), "{message}");
+        let copy_at = message
+            .find("--prefix lucaschess")
+            .expect("the ready-to-copy command names a distinct prefix");
+        let taken_at = message
+            .find("--prefix ref already")
+            .expect("the taken prefix is still named");
+        let replace_at = message.find("--replace-prefix").expect("flag");
+        assert!(
+            copy_at < taken_at && copy_at < replace_at,
+            "a distinct --prefix is the first remedy:\n{message}"
+        );
+        assert!(
+            message.contains("xerj autoindex /data/lucaschess --prefix lucaschess"),
+            "{message}"
+        );
         assert!(
             !message.contains("/data/elsewhere"),
             "a sibling prefix is not this corpus: {message}"
+        );
+    }
+
+    #[test]
+    fn the_suggested_prefix_is_not_the_taken_one_and_the_path_is_quoted() {
+        let message = prefix_reuse_message("ref", "/data/my folder", &["/data/old".into()], false);
+        assert!(
+            message.contains("xerj autoindex '/data/my folder' --prefix my-folder"),
+            "{message}"
+        );
+        let digit = prefix_reuse_message("ref", "/data/2024", &["/data/old".into()], false);
+        assert!(
+            digit.contains("--prefix data-2024"),
+            "a digit-leading folder name cannot be an index prefix, so the parent is used: {digit}"
+        );
+        assert!(
+            !digit.contains("--prefix 2024\n") && !digit.contains("--prefix 2024 "),
+            "{digit}"
         );
     }
 
@@ -1562,5 +1770,9 @@ mod prefix_reuse_tests {
         assert!(message.contains("--replace-prefix is set"), "{message}");
         assert!(message.contains("this run continues"), "{message}");
         assert!(!message.contains("Nothing was written"), "{message}");
+        assert!(
+            !message.contains("Ready to copy"),
+            "the opt-in warning is not the refusal's first remedy: {message}"
+        );
     }
 }
