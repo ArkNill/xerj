@@ -17700,7 +17700,10 @@ async fn search_impl(
     // #2121: every matched index, not whichever name was resolved first.
     // `xerj search` / `xerj_search` send one body at the whole prefix pattern;
     // a field that any of those indices maps is a real target.
-    let hint_schemas: Vec<xerj_common::types::Schema> = {
+    // A body with no query names no fields, so it skips the per-index reads.
+    let hint_schemas: Vec<xerj_common::types::Schema> = if body.query.is_none() {
+        Vec::new()
+    } else {
         let mut out = Vec::with_capacity(index_names.len());
         for name in &index_names {
             if let Ok(idx) = state.engine.get_index(name) {
