@@ -71,7 +71,8 @@ ronitgupta138 and Jitin2102.
   files now exits 4 and lists those files and the datasets that would be
   left empty. `--drop-indexed` is the confirmation that deletes them.
   `--plan` and `--yes` choose what to index; they do not agree to the
-  deletion.
+  deletion. The regression came from #2102 and never shipped in a release
+  (PR [#2128](https://github.com/xerj-org/xerj/pull/2128)).
 
 - `POST /_ask` (`xerj_plan`) grounds a slash-bearing path in the prompt as a
   keyword `prefix` on `ax_path` (then `path`, `filepath`, `file`, `ax_file`).
