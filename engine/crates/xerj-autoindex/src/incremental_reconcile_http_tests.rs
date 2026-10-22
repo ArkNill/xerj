@@ -6640,6 +6640,99 @@ mod delete_gate {
         assert_eq!(paths(&endpoint.data_docs()), after);
     }
 
+    /// The graph path (the default, `no_graph: false`) has no generated
+    /// manifest; the prior plan is the legacy `plan.json`. A reduced plan
+    /// would make its exclusion sweep delete the csv documents. Same contract
+    /// as the `--no-graph` test above: exit 4 and nothing changed, then
+    /// `--drop-indexed` removes exactly the files the plan leaves out.
+    #[test]
+    fn a_reduced_plan_on_the_graph_path_does_not_delete_indexed_data() {
+        let _guard = HTTP_E2E_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let corpus = tempfile::tempdir().unwrap();
+        fs::write(
+            corpus.path().join("main.rs"),
+            "fn main() { println!(\"kept\"); }\n",
+        )
+        .unwrap();
+        fs::write(corpus.path().join("notes.md"), "# notes\n\nstill indexed\n").unwrap();
+        fs::write(corpus.path().join("rows.csv"), "id,value\n1,alpha\n").unwrap();
+
+        let endpoint = HttpEndpoint::start();
+        let state_dir = tempfile::tempdir().unwrap();
+        let graph_cfg = || {
+            let mut c = cfg(corpus.path(), state_dir.path(), &endpoint.url, false);
+            c.prefix = "plan-removal-graph".into();
+            c.no_graph = false;
+            c
+        };
+        assert_eq!(
+            run_index(graph_cfg()).unwrap(),
+            0,
+            "the full folder indexes"
+        );
+        let indexed = paths(&endpoint.data_docs());
+        assert!(
+            indexed.iter().any(|path| path.ends_with("rows.csv")),
+            "the csv dataset indexed: {indexed:?}"
+        );
+        let deletes = |endpoint: &HttpEndpoint| {
+            endpoint
+                .state
+                .lock()
+                .unwrap()
+                .requests
+                .iter()
+                .filter(|(method, path)| {
+                    method == "DELETE" || (method == "POST" && path.contains("/_delete_by_query"))
+                })
+                .count()
+        };
+        let deletes_before = deletes(&endpoint);
+
+        let mut reduced = graph_cfg();
+        reduced.budget_plan = Some("code-and-docs".into());
+        assert_eq!(
+            run_index(reduced).unwrap(),
+            gate::EXIT_NEEDS_DECISION,
+            "a reduced plan on the graph path must stop before it deletes indexed data"
+        );
+        assert_eq!(
+            paths(&endpoint.data_docs()),
+            indexed,
+            "the csv is still live"
+        );
+        assert_eq!(
+            deletes(&endpoint),
+            deletes_before,
+            "the refusal must not delete"
+        );
+
+        let mut yes = graph_cfg();
+        yes.budget_plan = Some("code-and-docs".into());
+        yes.approve = Some(crate::gate::Approval::Proceed);
+        assert_eq!(
+            run_index(yes).unwrap(),
+            gate::EXIT_NEEDS_DECISION,
+            "--yes does not agree to the deletion"
+        );
+        assert_eq!(paths(&endpoint.data_docs()), indexed);
+
+        let mut confirmed = graph_cfg();
+        confirmed.budget_plan = Some("code-and-docs".into());
+        confirmed.drop_indexed = true;
+        assert_eq!(run_index(confirmed).unwrap(), 0, "--drop-indexed confirms");
+        let after = paths(&endpoint.data_docs());
+        assert!(
+            after.iter().any(|path| path.ends_with("main.rs"))
+                && after.iter().any(|path| path.ends_with("notes.md")),
+            "the plan keeps code and prose: {after:?}"
+        );
+        assert!(
+            after.iter().all(|path| !path.ends_with("rows.csv")),
+            "the confirmed plan removes the csv: {after:?}"
+        );
+    }
+
     fn base() -> CommittedManifest {
         CommittedManifest {
             generation: 0,
