@@ -43,6 +43,16 @@ ronitgupta138 and Jitin2102.
 
 ### Added
 
+- `xerj autoindex remove --prefix P [--root R]` and the MCP tool
+  `xerj_autoindex_remove` drop one autoindexed folder. They list the indices,
+  catalog rows, doc counts and sizes first and delete nothing without `--yes`,
+  a `y` at the terminal, or `confirm: true`. An index another folder or a
+  sibling prefix still names is kept, and `autoindex-catalog` is never
+  deleted. `DELETE` of `*`, `_all` or a wildcard is now refused unless
+  `action.destructive_requires_name` is set to false, as in ES 8. The agent
+  docs and tool descriptions say not to delete an index the agent did not
+  create (PR [#2126](https://github.com/xerj-org/xerj/pull/2126), from field
+  report #2114).
 - `GET /_memory` lists the agent-memory namespaces (PR
   [#2022](https://github.com/xerj-org/xerj/pull/2022), ravi-arnan).
 - `xerj autoindex --walk-only` stops after the walk. It prints each top-level
@@ -196,6 +206,11 @@ ronitgupta138 and Jitin2102.
   plain-word `xerj search` and `xerj_search` apply `xerj def`'s penalty to test,
   example, fuzz and bench paths. Prose corpora, DSL queries and explicit sorts
   keep the engine's order (PR [#2125](https://github.com/xerj-org/xerj/pull/2125)).
+- Ask and map: `POST /_ask` (`xerj_plan`) keeps a directory in the prompt as a
+  path-prefix filter instead of dropping it as decoration, and `xerj autoindex
+  map` lists the `ax_*` locator fields (PR
+  [#2124](https://github.com/xerj-org/xerj/pull/2124)). Two slash-joined words
+  such as `tcp/ip` stay prose.
 - Autoindex: a heartbeat while an extract slot is full (PR
   [#1657](https://github.com/xerj-org/xerj/pull/1657)). An open section overlaps
   on a word (PR [#1700](https://github.com/xerj-org/xerj/pull/1700)). The help
@@ -310,6 +325,8 @@ ronitgupta138 and Jitin2102.
 
 ### Community & field reports
 
+- Field report: the ES-YAML conformance run on a debug node (PR
+  [#2127](https://github.com/xerj-org/xerj/pull/2127)).
 - Field reports: the HTTP, MCP and console dogfood (PR
   [#1688](https://github.com/xerj-org/xerj/pull/1688)); autoindex and search on a
   Windows Electron/Vue project (PR [#1809](https://github.com/xerj-org/xerj/pull/1809),
