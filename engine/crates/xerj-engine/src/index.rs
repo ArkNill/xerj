@@ -612,7 +612,7 @@ mod collection_publication_fail_closed_tests {
         let docs = [json!({"user": {"bio": "hello"}}), json!({"user": {}})];
         let cols = super::build_doc_value_columns(docs.iter().map(Some), &skip);
         assert!(
-            cols.get("user.bio").is_none(),
+            !cols.contains_key("user.bio"),
             "a dotted field must not get a presence column: {:?}",
             cols.get("user.bio")
         );
