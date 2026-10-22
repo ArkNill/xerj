@@ -9,12 +9,14 @@
 //!
 //! It speaks the MCP **stdio transport**: newline-delimited
 //! JSON-RPC 2.0 messages on stdin/stdout. It exposes XERJ to any MCP-capable
-//! agent host (Claude Desktop, IDE agents, custom orchestrators) as nineteen
-//! tools: sixteen without a hub key, and three Corpus Hub tools
+//! agent host (Claude Desktop, IDE agents, custom orchestrators) as twenty
+//! tools: seventeen without a hub key, and three Corpus Hub tools
 //! (`xerj_hub_*`) that run the `xerj ask` flow itself. Thirteen of those
-//! sixteen construct exactly the request the running engine already accepts
+//! seventeen construct exactly the request the running engine already accepts
 //! and forward it to a configurable base URL. `xerj_index_budget` counts a
-//! folder and returns the budget plans; it does not index. `xerj_corpus_feedback` posts an
+//! folder and returns the budget plans; it does not index. `xerj_autoindex_remove`
+//! deletes one autoindexed folder after listing what that folder owns, and only
+//! when the caller passes `confirm: true`. `xerj_corpus_feedback` posts an
 //! agent's review of a hub corpus to hub.xerj.org. `xerj_field_report` does not:
 //! it files a field report, not to the node: a GitHub PR first (through
 //! `xerj feedback --submit --github-only`), and a POST to the web endpoint only
@@ -106,11 +108,14 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use xerj_common::code_query::{
-    mapped_property_names, numeric_property_names, search_query_body_for_mapping,
+    code_symbol_fields_absent, mapped_property_names, numeric_property_names,
+    search_query_body_for_mapping,
 };
 
 /// MCP protocol revision we default to when the client does not request one.
 const DEFAULT_PROTOCOL_VERSION: &str = "2025-06-18";
+/// `POST /_search` page size when the caller omits `size` (`EsSearchBody`).
+const DEFAULT_SEARCH_SIZE: usize = 10;
 /// Default XERJ ES-compatible endpoint.
 const DEFAULT_XERJ_URL: &str = "http://localhost:9200";
 
@@ -576,6 +581,14 @@ const BRAIN_HONESTY: &str = " Honesty: links come from deterministic lexical \
      search engine with a graph-shaped index over its own documents, not a \
      graph database.";
 
+/// The rule an agent has to see before it reaches for `DELETE /ax-docs`.
+const NEVER_DELETE_INDEX: &str = " Never DELETE an index you did not create in \
+     this session. A shared default prefix is not a reason to delete one: use \
+     `xerj autoindex remove --prefix <name>` (MCP tool `xerj_autoindex_remove` \
+     is the same operation). It lists the indices, catalog rows, doc counts and \
+     sizes, deletes nothing without confirmation, and never removes another \
+     folder under that prefix.";
+
 /// JSON-schema fragment for the optional `rerank` argument, shared by
 /// `xerj_search` and `xerj_hybrid_search` so the two descriptions cannot drift.
 ///
@@ -757,9 +770,11 @@ pub fn tool_specs_with(include_hub: bool) -> Value {
                 "properties": {
                     "index": {
                         "type": "string",
-                        "description": "Index name or pattern to search. Defaults to `ax-*` — \
-                         the prefix `xerj autoindex` writes — so the common case needs \
-                         no argument. Pass an explicit name to search anything else."
+                        "description": format!(
+                            "Index name or pattern to search. Defaults to `ax-*` — \
+                             the prefix `xerj autoindex` writes — so the common case needs \
+                             no argument. Pass an explicit name to search anything else.{NEVER_DELETE_INDEX}"
+                        )
                     },
                     "query": {
                         "type": ["object", "string"],
@@ -1065,7 +1080,9 @@ pub fn tool_specs_with(include_hub: bool) -> Value {
         },
         {
             "name": "xerj_map",
-            "description": concat!(
+            "description": format!(
+                "{}{NEVER_DELETE_INDEX}",
+                concat!(
                 "Per-index FIELD MAP from this node's autoindex catalog — call it ",
                 "BEFORE writing query DSL, so you stop guessing field names. For each ",
                 "catalogued index: record count, time field and time range, semantic ",
@@ -1083,7 +1100,7 @@ pub fn tool_specs_with(include_hub: bool) -> Value {
                 "reports more). When more than 8 indexes match and you did not pass ",
                 "`index`, the answer is a SUMMARY page (index, records, field names) ",
                 "— pass `index` or `detail: true` with `offset`/`limit` for full fields."
-            ),
+            )),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1130,7 +1147,9 @@ pub fn tool_specs_with(include_hub: bool) -> Value {
         },
         {
             "name": "xerj_index_budget",
-            "description": concat!(
+            "description": format!(
+                "{}{NEVER_DELETE_INDEX}",
+                concat!(
                 "Count a folder and estimate the index BEFORE xerj autoindex hashes or ",
                 "embeds anything. Returns file and byte counts by kind (code, prose, pdf, ",
                 "data, binary, other — by extension, before content sniff) and by top-level ",
@@ -1144,7 +1163,7 @@ pub fn tool_specs_with(include_hub: bool) -> Value {
                 "lexical feature-hash vectors unless that node was started with ",
                 "--embed-mode neural. Kinds without a measured calibration are ",
                 "unmeasured and do not refuse the run."
-            ),
+            )),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1167,6 +1186,39 @@ pub fn tool_specs_with(include_hub: bool) -> Value {
                     }
                 },
                 "required": ["path"]
+            }
+        },
+        {
+            "name": "xerj_autoindex_remove",
+            "description": format!(
+                "{}{NEVER_DELETE_INDEX}",
+                concat!(
+                "Delete one autoindexed folder. Reads the autoindex catalog and returns ",
+                "exactly the indices, catalog rows, doc counts and sizes that belong to ",
+                "`prefix` (and to `root`, when the prefix holds more than one folder). ",
+                "Pass `confirm: true` only after you have read that plan. Without it ",
+                "nothing is deleted and the result is an error, so a caller cannot ",
+                "mistake the preview for a completed delete. An index another folder ",
+                "under the same prefix still names is left in place. `autoindex-catalog` ",
+                "is never deleted. This does not walk or index a folder."
+            )),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "prefix": {
+                        "type": "string",
+                        "description": "The prefix the folder was indexed with. Required. The shared default `ax` is not assumed."
+                    },
+                    "root": {
+                        "type": "string",
+                        "description": "The folder to drop, when `prefix` holds more than one. Omit it only when the plan lists a single root."
+                    },
+                    "confirm": {
+                        "type": "boolean",
+                        "description": "Delete what the plan lists. false, or omitted, prints the plan and deletes nothing."
+                    }
+                },
+                "required": ["prefix"]
             }
         },
         {
@@ -1773,6 +1825,9 @@ async fn call_tool(ctx: &Ctx, msg: &Value) -> Value {
         None
     };
 
+    // Set only for a plain-string code search (#2122). `Some(page)` means
+    // the response hits are penalized and trimmed back to `page`.
+    let mut demote_page: Option<usize> = None;
     let result = match name {
         "xerj_search" => {
             // #1961: a plain-string query is shaped from the target's mapping,
@@ -1780,16 +1835,40 @@ async fn call_tool(ctx: &Ctx, msg: &Value) -> Value {
             // answers HTTP 400 `strict_unknown_fields` because the body names
             // `defs` and `name`, which it does not map. A DSL object is
             // forwarded untouched (no mapping read, no rewriting).
-            let mapping = match args.get("query") {
-                Some(Value::String(q)) if !q.trim().is_empty() => {
-                    fetch_mapping(ctx, search_index(&args)).await
-                }
-                _ => None,
+            let plain = matches!(
+                args.get("query"),
+                Some(Value::String(q)) if !q.trim().is_empty()
+            );
+            let mapping = if plain {
+                fetch_mapping(ctx, search_index(&args)).await
+            } else {
+                None
             };
-            match mapping {
-                Some(mapping) => build_search_with_mapping(&args, Some(&mapping)),
+            let mut built = match mapping.as_ref() {
+                Some(mapping) => build_search_with_mapping(&args, Some(mapping)),
                 None => build_search(&args),
+            };
+            if plain_search_demotes_test_paths(&args, mapping.as_ref()) {
+                let page = match opt_u64(&args, "size") {
+                    Ok(Some(n)) => n as usize,
+                    Ok(None) => DEFAULT_SEARCH_SIZE,
+                    Err(msg) => return tool_text(msg, true),
+                };
+                let from = match opt_u64(&args, "from") {
+                    Ok(Some(n)) => n,
+                    Ok(None) => 0,
+                    Err(msg) => return tool_text(msg, true),
+                };
+                demote_page = Some(page);
+                // First page only: a wider fetch, then trim back to `page`
+                // after the penalty. `from` > 0 keeps the caller's window.
+                if from == 0 && page > 0 {
+                    if let Ok((_, _, Some(body))) = built.as_mut() {
+                        body["size"] = json!(xerj_autoindex::search::search_fetch_size(page));
+                    }
+                }
             }
+            built
         }
         "xerj_semantic_search" => build_semantic(&args),
         "xerj_vector_search" => build_vector(&args),
@@ -1812,6 +1891,7 @@ async fn call_tool(ctx: &Ctx, msg: &Value) -> Value {
         // returns a tool result directly instead of a BuiltRequest.
         "xerj_map" => return map::run(ctx, &args).await,
         "xerj_index_budget" => return run_index_budget(ctx, &args).await,
+        "xerj_autoindex_remove" => return run_autoindex_remove(ctx, &args).await,
         "xerj_code_search" => return run_code_search(ctx, &args).await,
         // Corpus Hub v2 (plan §7): the `xerj ask` flow itself, not a proxy.
         hub_tool if hub_tool.starts_with("xerj_hub_") => {
@@ -1830,9 +1910,53 @@ async fn call_tool(ctx: &Ctx, msg: &Value) -> Value {
     };
 
     match result {
-        Ok((method, path, body)) => engine_request(ctx, method, &path, body, budget).await,
+        Ok((method, path, body)) => {
+            engine_request(ctx, method, &path, body, budget, demote_page).await
+        }
         Err(msg) => tool_text(msg, true),
     }
+}
+
+/// Plain-word `xerj_search` on a code corpus (#2122).
+///
+/// Same gate as `xerj search`: a readable mapping with none of `name` /
+/// `code` / `defs` is prose and is left on the engine's order. An unreadable
+/// mapping keeps the code-shaped query, so the demotion applies there too.
+/// An explicit `sort`, `rerank`, or `judge` owns the order.
+fn plain_search_demotes_test_paths(args: &Value, mapping: Option<&Value>) -> bool {
+    let Some(Value::String(q)) = args.get("query") else {
+        return false;
+    };
+    if q.trim().is_empty() {
+        return false;
+    }
+    if ["sort", "rerank", "judge"]
+        .iter()
+        .any(|key| args.get(*key).is_some_and(|v| !v.is_null()))
+    {
+        return false;
+    }
+    let mapped = mapping.and_then(mapped_property_names);
+    !code_symbol_fields_absent(mapped.as_ref())
+}
+
+/// Halve test/example/fuzz/bench scores and trim to the caller's page.
+///
+/// The penalty is [`xerj_autoindex::def::penalize_demoted_paths`] — the same
+/// `path_is_demoted` rules `xerj def` uses. A response that is not a search
+/// hit list is returned unchanged.
+fn apply_search_path_demotion(text: &str, page: usize) -> String {
+    let Ok(mut resp) = serde_json::from_str::<Value>(text) else {
+        return text.to_string();
+    };
+    {
+        let Some(hits) = resp.pointer_mut("/hits/hits").and_then(Value::as_array_mut) else {
+            return text.to_string();
+        };
+        xerj_autoindex::def::penalize_demoted_paths(hits);
+        hits.truncate(page);
+    }
+    serde_json::to_string(&resp).unwrap_or_else(|_| text.to_string())
 }
 
 /// HTTP method of a proxied engine request. The engine's graph surface is not
@@ -2612,6 +2736,82 @@ async fn run_index_budget(ctx: &Ctx, args: &Value) -> Value {
     }
 }
 
+/// `Es` stores the bare token and writes `Authorization: ApiKey <token>`.
+/// `Ctx.auth` is already that header value.
+fn api_key_from_header(auth: Option<String>) -> Option<String> {
+    let raw = auth?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let key = trimmed
+        .strip_prefix("ApiKey ")
+        .or_else(|| trimmed.strip_prefix("ApiKey"))
+        .unwrap_or(trimmed)
+        .trim();
+    if key.is_empty() {
+        None
+    } else {
+        Some(key.to_string())
+    }
+}
+
+/// `xerj_autoindex_remove` — the same operation as `xerj autoindex remove`.
+///
+/// `confirm` is not optional in spirit: missing or false returns the plan and
+/// `isError: true`, so an agent that only looks at the tool result cannot
+/// treat a preview as a finished delete. There is no terminal prompt.
+async fn run_autoindex_remove(ctx: &Ctx, args: &Value) -> Value {
+    let prefix = match args.get("prefix").and_then(Value::as_str) {
+        Some(p) if !p.is_empty() => p.to_string(),
+        _ => {
+            return tool_text(
+                "xerj_autoindex_remove: `prefix` is required. The default name ax is shared \
+                 across folders; pass the prefix you indexed with.",
+                true,
+            )
+        }
+    };
+    let root = match args.get("root") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
+        Some(Value::String(_)) => {
+            return tool_text(
+                "xerj_autoindex_remove: `root` must be a non-empty path",
+                true,
+            )
+        }
+        Some(_) => return tool_text("xerj_autoindex_remove: `root` must be a string", true),
+    };
+    let confirm = match args.get("confirm") {
+        None | Some(Value::Null) | Some(Value::Bool(false)) => false,
+        Some(Value::Bool(true)) => true,
+        Some(_) => return tool_text("xerj_autoindex_remove: `confirm` must be a boolean", true),
+    };
+    let url = ctx.base_url.clone();
+    let api_key = api_key_from_header(ctx.auth.clone());
+    let joined = tokio::task::spawn_blocking(move || {
+        xerj_autoindex::remove::execute(xerj_autoindex::remove::RemoveRequest {
+            url,
+            api_key,
+            prefix,
+            root,
+            yes: confirm,
+            prompt: false,
+        })
+    })
+    .await;
+    match joined {
+        Ok(Ok(report)) => {
+            let plan = serde_json::to_string_pretty(&report.body)
+                .unwrap_or_else(|_| report.body.to_string());
+            tool_text(format!("{}\n{plan}", report.summary), report.exit_code != 0)
+        }
+        Ok(Err(err)) => tool_text(format!("xerj_autoindex_remove: {err:#}"), true),
+        Err(err) => tool_text(format!("xerj_autoindex_remove: {err}"), true),
+    }
+}
+
 /// `xerj_code_search` — the SAME pipeline `xerj code` runs, from the SAME
 /// renderer; only the surface differs. Warnings ride the TOP of the tool text
 /// (MCP has no stderr channel, so warnings are content), and the exit-code
@@ -2831,6 +3031,7 @@ async fn engine_request(
     path: &str,
     body: Option<Value>,
     budget: Option<usize>,
+    demote_page: Option<usize>,
 ) -> Value {
     let url = format!("{}{}", ctx.base_url, path);
     let mut req = match method {
@@ -2850,6 +3051,10 @@ async fn engine_request(
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
             if status.is_success() {
+                let text = match demote_page {
+                    Some(page) => apply_search_path_demotion(&text, page),
+                    None => text,
+                };
                 match budget {
                     Some(max_tokens) => {
                         tool_text(token_budget::budget_json_response(&text, max_tokens), false)
@@ -3199,6 +3404,82 @@ mod tests {
             with["query"], without["query"],
             "a code corpus must keep the #916 query"
         );
+    }
+
+    /// #2122: the demotion is plain-word search on a code corpus. A prose
+    /// mapping, a DSL object, and an explicit sort/rerank/judge do not take it.
+    #[test]
+    fn plain_search_demotion_follows_the_code_corpus_gate() {
+        let code = json!({
+            "ax-rust": { "mappings": { "properties": {
+                "name": {"type": "keyword"}, "code": {"type": "text"}, "defs": {"type": "text"}
+            }}}
+        });
+        let prose = json!({
+            "ax-docs": { "mappings": { "properties": {
+                "body": {"type": "text"}, "title": {"type": "text"}
+            }}}
+        });
+        assert!(plain_search_demotes_test_paths(
+            &json!({"query": "render the transcript"}),
+            Some(&code)
+        ));
+        assert!(plain_search_demotes_test_paths(
+            &json!({"query": "render the transcript"}),
+            None
+        ));
+        assert!(!plain_search_demotes_test_paths(
+            &json!({"query": "render the transcript"}),
+            Some(&prose)
+        ));
+        assert!(!plain_search_demotes_test_paths(
+            &json!({"query": {"match": {"body": "render"}}}),
+            Some(&code)
+        ));
+        assert!(!plain_search_demotes_test_paths(
+            &json!({"query": "render", "sort": ["_score"]}),
+            Some(&code)
+        ));
+        assert!(!plain_search_demotes_test_paths(
+            &json!({"query": "render", "rerank": {"query": "render"}}),
+            Some(&code)
+        ));
+        assert!(!plain_search_demotes_test_paths(
+            &json!({"query": "  "}),
+            Some(&code)
+        ));
+    }
+
+    /// The same penalty the CLI applies: a barely-leading test drops behind
+    /// the implementation and stays on the page; the wider fetch is trimmed
+    /// back to the caller's size.
+    #[test]
+    fn plain_string_response_penalizes_test_paths_and_trims_the_window() {
+        let raw = r#"{"hits":{"hits":[
+            {"_id":"t","_score":12.0,"_source":{"ax_path":"src/tests/render.test.tsx"}},
+            {"_id":"i","_score":9.0,"_source":{"ax_path":"src/render.tsx"}},
+            {"_id":"s","_score":30.0,"_source":{"ax_path":"tests/contract.rs"}},
+            {"_id":"x","_score":1.0,"_source":{"ax_path":"src/extra.rs"}}
+        ]}}"#;
+        let text = apply_search_path_demotion(raw, 3);
+        let resp: Value = serde_json::from_str(&text).unwrap();
+        let paths: Vec<&str> = resp["hits"]["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["_source"]["ax_path"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                "tests/contract.rs",
+                "src/render.tsx",
+                "src/tests/render.test.tsx"
+            ]
+        );
+        assert_eq!(resp["hits"]["hits"][2]["_score"], json!(6.0));
+        assert_eq!(resp["hits"]["hits"][1]["_score"], json!(9.0));
+        assert_eq!(apply_search_path_demotion("not json", 3), "not json");
     }
 
     /// A numeric mapping of a code field drops that leg (#1284 via #1601):
@@ -4077,6 +4358,10 @@ mod tests {
     /// One HTTP/1.1 request, then a tiny JSON 200. Reads Content-Length so the
     /// client is not left waiting on a half-consumed body.
     fn read_one_http(listener: std::net::TcpListener) -> String {
+        read_one_http_reply(listener, r#"{"ok":true,"stored":true}"#.to_string())
+    }
+
+    fn read_one_http_reply(listener: std::net::TcpListener, response_body: String) -> String {
         use std::io::{Read, Write};
         let (mut sock, _) = listener.accept().expect("accept");
         sock.set_read_timeout(Some(std::time::Duration::from_secs(5)))
@@ -4112,7 +4397,6 @@ mod tests {
                 Err(_) => break,
             }
         }
-        let response_body = r#"{"ok":true,"stored":true}"#;
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
             response_body.len()
@@ -4218,6 +4502,161 @@ mod tests {
             request.contains("\"text\""),
             "the mapped prose field was not searched: {request}"
         );
+        assert!(
+            !request.contains("\"size\""),
+            "a prose corpus must not widen the fetch for the code-path penalty: {request}"
+        );
+    }
+
+    /// #2122: plain-word search on a code index asks for the rerank window and
+    /// returns the implementation ahead of a test file that only barely led.
+    /// The test file is still in the page.
+    #[test]
+    fn search_tool_demotes_test_paths_on_a_code_index() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mapping = r#"{"ax-code":{"mappings":{"properties":{"name":{"type":"keyword"},"code":{"type":"text"},"defs":{"type":"text"},"body":{"type":"text"}}}}}"#;
+        let hits = r#"{"took":1,"hits":{"total":{"value":3,"relation":"eq"},"hits":[{"_id":"t","_score":12.0,"_source":{"ax_path":"src/tests/render.test.tsx"}},{"_id":"i","_score":9.0,"_source":{"ax_path":"src/render.tsx"}},{"_id":"s","_score":30.0,"_source":{"ax_path":"tests/contract.rs"}}]}}"#;
+        let server = std::thread::spawn(move || serve_mapping_then_search(listener, mapping, hits));
+        let ctx = Ctx {
+            client: reqwest::Client::new(),
+            base_url: format!("http://127.0.0.1:{port}"),
+            auth: None,
+        };
+        let msg = json!({
+            "params": { "name": "xerj_search", "arguments": {
+                "query": "render the transcript",
+                "size": 3
+            } }
+        });
+        let res = block_on(call_tool(&ctx, &msg));
+        let request = server.join().expect("fake node thread");
+        assert_eq!(res["isError"], false, "{res}");
+        let window = xerj_autoindex::search::search_fetch_size(3);
+        assert!(
+            request.contains(&format!("\"size\":{window}")),
+            "the first page must fetch the rerank window {window}: {request}"
+        );
+        let body: Value = serde_json::from_str(&tool_body(&res)).unwrap();
+        let paths: Vec<&str> = body["hits"]["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["_source"]["ax_path"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                "tests/contract.rs",
+                "src/render.tsx",
+                "src/tests/render.test.tsx"
+            ]
+        );
+    }
+
+    /// A prose corpus keeps the engine order, including a `tests/` path.
+    #[test]
+    fn search_tool_does_not_demote_paths_on_a_prose_index() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mapping = r#"{"ax-docs":{"mappings":{"properties":{"body":{"type":"text"},"title":{"type":"text"},"text":{"type":"text"}}}}}"#;
+        let hits = r#"{"took":1,"hits":{"hits":[{"_id":"t","_score":12.0,"_source":{"ax_path":"tests/guide.md"}},{"_id":"i","_score":9.0,"_source":{"ax_path":"guide.md"}}]}}"#;
+        let server = std::thread::spawn(move || serve_mapping_then_search(listener, mapping, hits));
+        let ctx = Ctx {
+            client: reqwest::Client::new(),
+            base_url: format!("http://127.0.0.1:{port}"),
+            auth: None,
+        };
+        let msg = json!({
+            "params": { "name": "xerj_search", "arguments": {
+                "query": "how does the retry policy work"
+            } }
+        });
+        let res = block_on(call_tool(&ctx, &msg));
+        let request = server.join().expect("fake node thread");
+        assert_eq!(res["isError"], false, "{res}");
+        assert!(!request.contains("\"size\""), "{request}");
+        let body: Value = serde_json::from_str(&tool_body(&res)).unwrap();
+        assert_eq!(
+            body["hits"]["hits"][0]["_source"]["ax_path"],
+            "tests/guide.md"
+        );
+        assert_eq!(body["hits"]["hits"][0]["_score"], json!(12.0));
+    }
+
+    /// A DSL object is forwarded and returned in the engine's order. `from`
+    /// keeps the caller's page size instead of the rerank window.
+    #[test]
+    fn search_tool_leaves_a_dsl_query_and_a_later_page_unwidened() {
+        let hits = r#"{"hits":{"hits":[{"_id":"t","_score":12.0,"_source":{"ax_path":"tests/a.rs"}},{"_id":"i","_score":9.0,"_source":{"ax_path":"src/a.rs"}}]}}"#;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let body = hits.to_string();
+        let server = std::thread::spawn(move || read_one_http_reply(listener, body));
+        let ctx = Ctx {
+            client: reqwest::Client::new(),
+            base_url: format!("http://127.0.0.1:{port}"),
+            auth: None,
+        };
+        let res = block_on(call_tool(
+            &ctx,
+            &json!({
+                "params": { "name": "xerj_search", "arguments": {
+                    "query": { "match": { "body": "render the transcript" } }
+                } }
+            }),
+        ));
+        let request = server.join().expect("fake node thread");
+        assert_eq!(res["isError"], false, "{res}");
+        assert!(
+            request.contains("\"match\""),
+            "a DSL query is forwarded: {request}"
+        );
+        let parsed: Value = serde_json::from_str(&tool_body(&res)).unwrap();
+        assert_eq!(
+            parsed["hits"]["hits"][0]["_source"]["ax_path"],
+            "tests/a.rs"
+        );
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mapping = r#"{"ax-code":{"mappings":{"properties":{"name":{"type":"keyword"},"code":{"type":"text"},"defs":{"type":"text"}}}}}"#;
+        let page_hits = hits.to_string();
+        let server =
+            std::thread::spawn(move || serve_mapping_then_search(listener, mapping, &page_hits));
+        let ctx = Ctx {
+            client: reqwest::Client::new(),
+            base_url: format!("http://127.0.0.1:{port}"),
+            auth: None,
+        };
+        let res = block_on(call_tool(
+            &ctx,
+            &json!({
+                "params": { "name": "xerj_search", "arguments": {
+                    "query": "render the transcript",
+                    "size": 3,
+                    "from": 3
+                } }
+            }),
+        ));
+        let request = server.join().expect("fake node thread");
+        assert_eq!(res["isError"], false, "{res}");
+        assert!(
+            request.contains("\"from\":3"),
+            "the caller's offset is forwarded: {request}"
+        );
+        assert!(
+            request.contains("\"size\":3") && !request.contains("\"size\":43"),
+            "a later page keeps the caller's size: {request}"
+        );
+        let parsed: Value = serde_json::from_str(&tool_body(&res)).unwrap();
+        let paths: Vec<&str> = parsed["hits"]["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["_source"]["ax_path"].as_str().unwrap())
+            .collect();
+        assert_eq!(paths, vec!["src/a.rs", "tests/a.rs"]);
     }
 
     fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
@@ -4376,6 +4815,54 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn autoindex_remove_validates_before_it_connects() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let ctx = Ctx {
+            client: reqwest::Client::new(),
+            base_url: format!("http://127.0.0.1:{port}"),
+            auth: Some("ApiKey secret".into()),
+        };
+        for args in [json!({}), json!({"prefix": "ax", "confirm": "yes"})] {
+            let result = call_tool(
+                &ctx,
+                &json!({ "params": { "name": "xerj_autoindex_remove", "arguments": args } }),
+            )
+            .await;
+            assert_eq!(result["isError"], true, "{result}");
+            match listener.accept() {
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {}
+                other => panic!("validation must not open a connection: {other:?}"),
+            }
+        }
+        let specs = tool_specs_with(true);
+        let text = |name: &str| {
+            specs
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["name"] == name)
+                .unwrap()["description"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        assert!(text("xerj_autoindex_remove").contains("Never DELETE an index you did not create"));
+        assert!(text("xerj_map").contains("Never DELETE an index you did not create"));
+        let search = specs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "xerj_search")
+            .unwrap();
+        assert!(search["inputSchema"]["properties"]["index"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("Never DELETE an index you did not create"));
+    }
+
     #[test]
     fn tools_list_has_all_eighteen() {
         let specs = tool_specs_with(true);
@@ -4385,7 +4872,7 @@ mod tests {
             .iter()
             .map(|t| t["name"].as_str().unwrap())
             .collect();
-        assert_eq!(names.len(), 19);
+        assert_eq!(names.len(), 20);
         for n in [
             "xerj_search",
             "xerj_semantic_search",
@@ -4400,6 +4887,7 @@ mod tests {
             // #1055: the per-index field map from the autoindex catalog.
             "xerj_map",
             "xerj_index_budget",
+            "xerj_autoindex_remove",
             // #977: reference-coding retrieval, served by the same pipeline
             // as `xerj code`.
             "xerj_code_search",
@@ -4454,12 +4942,20 @@ mod tests {
             ["agent", "used_for", "verdict"]
         );
         // Deliberately NOT exposed: raw traversal, bulk dumps, operator actions.
-        for forbidden in ["graph_expand", "autoindex", "dump"] {
+        for forbidden in ["graph_expand", "dump"] {
             assert!(
                 !names.iter().any(|n| n.contains(forbidden)),
                 "must not expose {forbidden}"
             );
         }
+        // Indexing stays off this list. Remove is the one autoindex operation
+        // an agent is allowed to call, and only with `confirm: true`.
+        let autoindex_tools: Vec<_> = names
+            .iter()
+            .copied()
+            .filter(|n| n.contains("autoindex"))
+            .collect();
+        assert_eq!(autoindex_tools, vec!["xerj_autoindex_remove"]);
     }
 
     /// A process with no hub signing key must not advertise tools that can
@@ -4476,23 +4972,23 @@ mod tests {
                 .collect()
         };
         let without = names(false);
-        assert_eq!(without.len(), 16, "{without:?}");
+        assert_eq!(without.len(), 17, "{without:?}");
         assert!(
             without.iter().all(|n| !n.starts_with("xerj_hub_")),
             "{without:?}"
         );
         let with = names(true);
-        assert_eq!(with.len(), 19, "{with:?}");
+        assert_eq!(with.len(), 20, "{with:?}");
         for n in ["xerj_hub_find", "xerj_hub_def", "xerj_hub_ask"] {
             assert!(with.iter().any(|name| name == n), "missing {n}");
         }
 
         let help = tools_paragraph(false);
-        assert!(help.contains("proxies 16 tools"), "{help}");
+        assert!(help.contains("proxies 17 tools"), "{help}");
         assert!(!help.contains("xerj_hub_"), "{help}");
         assert!(help.contains("~/xerj-data"), "{help}");
         let help = tools_paragraph(true);
-        assert!(help.contains("proxies 19 tools"), "{help}");
+        assert!(help.contains("proxies 20 tools"), "{help}");
         assert!(help.contains("xerj_hub_ask"), "{help}");
         assert!(help.contains("serves 3 Corpus Hub tools"), "{help}");
     }
