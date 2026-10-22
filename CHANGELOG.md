@@ -12,7 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Window since v1.0.0-rc.97: a console-API security fix (CVE-2026-97406), a
 budget-aware `xerj autoindex` that estimates the index and checks it against
 the node's flood-stage watermark before hashing (with `--plan`, `--yes` and
-`--max-index-size`), `--walk-only`, a fail-fast on a full node disk, ES
+`--max-index-size`; a reduced plan never deletes already-indexed data without
+`--drop-indexed`), `xerj autoindex remove` for dropping one folder safely,
+`--walk-only`, a fail-fast on a full node disk, ES
 request validation and query/aggregation fixes, highlighting, search ranking
 and citation fixes, Corpus Hub routing and ratings, and the field-report
 footer honouring the opt-out. Contributors in this window: amartya1523,
